@@ -1,0 +1,44 @@
+# ---- 构建产物 ----
+# 注意：骨架 zip 里原本混着原作者的 build/（1523 项 / 327 MB），解压时已跳过。
+# 这一行的作用是保证以后 build/ 永远不会被提交——一旦被提交，清理它的那个
+# commit 会永久留在历史里，反而变成"提交历史"上的污点，所以宁严勿松。
+build/
+*/build/
+cmake-build-*/
+
+# 对象/库/链接产物（本仓全部由源码构建，实测无预编译 .a/.lib，故可安全忽略）
+*.o
+*.obj
+*.a
+*.lib
+*.d
+*.elf
+*.map
+*.hex
+*.bin
+
+# ---- CMake / ninja 残留 ----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+.testing/
+
+# ---- IDE / 编辑器 ----
+.vscode/
+.idea/
+*.user
+*.jdbg
+*.jdbg.user
+.mxproject
+.cache/
+
+# ---- OS ----
+Thumbs.db
+.DS_Store
+
+# ---- 刻意不忽略的东西（理由）----
+# *.ioc : CubeMX 工程是"引脚/外设配置"的唯一可追溯来源，评审要看，必须提交
+# pc_test/ : 主机端测试台是验证证据，必须提交（但它不在任何 CMake glob 路径里，
+#            所以不会被编进固件；详见 pc_test/README.md）
