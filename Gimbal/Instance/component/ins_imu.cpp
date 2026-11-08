@@ -21,8 +21,9 @@
 /* Private constants ---------------------------------------------------------*/
 namespace {
 /* BMI088 两片 CS 的引脚归属按 CubeMX 里 spi.c 的引脚分布推定：
- *   SPI1 = PA5/PA6/PA7（SCK/MISO/MOSI），与 SPI1 相邻的 PA4 给加速度计，
- *   PB0 给陀螺仪。到基地后请按原理图/万用表确认这两条线，
+ *   实测 spi.c 的 SPI1 是 PB3(SCK)/PB4(MISO)/PA7(MOSI)（不是 PA5/PA6/PA7）；
+ *   PA4 给加速度计 CS、PB0 给陀螺仪 CS，与官方 C 型板参考实现一致。
+ *   仍建议到基地用万用表通断档确认这两条线，
  *   若反了只交换下面两组参数，不要动 imu.cpp 的逻辑。 */
 GPIO_TypeDef *const kAccCsPort = GPIOA;
 const uint16_t kAccCsPin = GPIO_PIN_4;

@@ -42,6 +42,7 @@ class Imu {
     float mahony_ki = 0.02f;      ///< 零偏在线修正
     uint32_t calib_ms = 1000;     ///< 开机静置标定时长
     float acc_norm_tol = 0.35f;   ///< 标定期间 |a| 允许偏离 1 g 的容差
+    uint32_t calib_timeout_ms = 3000;  ///< 标定超时：超过则放弃零偏标定并以 bias=0 就绪（S-13）
   };
 
   /** @brief 初始化 SPI 与传感器；HAL_SPI_Init 必须已由 CubeMX 完成。 */
@@ -54,6 +55,8 @@ class Imu {
 
   bool isReady(void) const { return ready_; }
   bool isOk(void) const { return sensor_ok_; }
+  /** @brief 是否发生过「标定超时降级」——为 true 表示零偏没标上，姿态只能短期可信。 */
+  bool isCalibTimeout(void) const { return calib_timeout_; }
 
   float roll(void) const { return euler_[0]; }
   float pitch(void) const { return euler_[1]; }
@@ -85,6 +88,8 @@ class Imu {
   float gyro_bias_[kAxis] = {0.0f, 0.0f, 0.0f};
   float bias_sum_[kAxis] = {0.0f, 0.0f, 0.0f};
   uint32_t calib_count_ = 0;
+  uint32_t calib_ticks_ = 0;
+  bool calib_timeout_ = false;
   float yaw_offset_ = 0.0f;
 };
 

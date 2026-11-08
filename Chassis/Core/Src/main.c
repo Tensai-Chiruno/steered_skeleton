@@ -105,12 +105,17 @@ int main(void) {
   MX_CAN2_Init();
 
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim2);
-  HAL_TIM_Base_Start_IT(&htim6);
-  /* 一次性初始化：建立电机对象 + CAN 滤波器/外设 + 接收中断。
-   * 必须在 htim6 启动之后调用也可以，但放在这里能让「初始化」与「第 1 个 1 ms
-   * 中断」之间不存在竞态：中断一旦跑起来就会访问电机对象。 */
+  /* P2-20：htim2 是自由计数器，不需要中断；用 _IT 启动会留下永不清的 UIF。
+   * 一旦将来有人在 CubeMX 里打开 TIM2_IRQn（而 stm32f4xx_it.c 没有对应 handler），
+   * 就会走进启动文件的弱默认死循环 → 约 51 s 后冻死 → 每 200 ms 被 IWDG 复位。 */
+  HAL_TIM_Base_Start(&htim2);
+
+  /* P1-1：先把对象和 CAN 全部初始化完，再开 1 ms 中断。
+   * 反过来（先 Start_IT 再 MainTaskInit）会让 TIM6 抢占主上下文：
+   * CommTask 可能在 HAL_CAN_Start 之前就发帧，EnsureInit 也可能被 ISR 重入做第二次 init。 */
   MainTaskInit();
+
+  HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
 
   /* Infinite loop */

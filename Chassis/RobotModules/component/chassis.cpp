@@ -5,6 +5,7 @@
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
+ *  V1.1.0      2026-11-09      Tensai-Chiruno  1. 按第二轮复查报告修 P0/P1
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
@@ -22,8 +23,10 @@
 /* Private macro -------------------------------------------------------------*/
 namespace {
 constexpr float kDt = 1e-3f;  ///< TIM6 控制周期 1 kHz
+constexpr float kPi = 3.14159265358979f;
 
 float Clamp(float v, float lo, float hi) {
+  if (!(v == v)) return 0.0f;  /* NaN 直接折 0，绝不让它进 float->int */
   if (v < lo) return lo;
   if (v > hi) return hi;
   return v;
@@ -32,7 +35,6 @@ float Clamp(float v, float lo, float hi) {
 
 namespace robot {
 
-/* Exported function definitions ---------------------------------------------*/
 void Chassis::init(void) {
   if (!ik_) {
     ik_ = GetChassisIkSolver();
@@ -42,6 +44,7 @@ void Chassis::init(void) {
     auto *pw = GetPidMotorWheel(i);
     if (ps) ps->reset();
     if (pw) pw->reset();
+    steer_hold_[i] = 0.0f;
   }
   target_.reset();
   inited_ = true;
@@ -49,10 +52,9 @@ void Chassis::init(void) {
 }
 
 void Chassis::setEnabled(bool en) {
+  if (enabled_ == en) return;
   enabled_ = en;
-  if (!en) {
-    setOutputZero();
-  }
+  if (!en) setOutputZero();
 }
 
 void Chassis::setOutputZero(void) {
@@ -61,12 +63,11 @@ void Chassis::setOutputZero(void) {
     auto *wheel = GetMotorWheel(i);
     if (steer) steer->setInput(0.0f);
     if (wheel) wheel->setInput(0.0f);
-  }
-  for (int i = 0; i < 4; ++i) {
     auto *ps = GetPidMotorSteer(i);
     auto *pw = GetPidMotorWheel(i);
     if (ps) ps->reset();
     if (pw) pw->reset();
+    steer_hold_[i] = 0.0f;
   }
 }
 
@@ -85,11 +86,9 @@ void Chassis::update(void) {
   t.vy = Clamp(target_.vy, -params_.max_linear_speed, params_.max_linear_speed);
   t.w = Clamp(target_.w, -params_.max_angular_speed, params_.max_angular_speed);
 
-  /* 2) 逆解：速度 -> 每个舵的目标转角 + 每个轮的轮心线速度 */
-  hello_world::chassis_ik_solver::ChassisIkSolver::WheelState ws[4];
-  ik_->solve(t.vx, t.vy, t.w, ws);
+  /* 2) 逆解：速度 -> 每个舵的目标转角 + 每个轮输出端角速度（rad/s） */
+  ik_->solve(t.vx, t.vy, t.w, wheel_state_);
 
-  /* 3) 舵向角度环 + 轮速环，输出 raw 直接喂电机 */
   for (int i = 0; i < 4; ++i) {
     auto *steer = GetMotorSteer(i);
     auto *wheel = GetMotorWheel(i);
@@ -97,32 +96,39 @@ void Chassis::update(void) {
       continue;
     }
 
-    /* 舵向：目标角度已在 inverse kinematics 里做过「就近转」与限速，
-     * 反馈角度已由 ins_motor.cpp 的 angle_offset 折算到零位为 0。 */
-    float steer_raw = 0.0f;
-    float err = ws[i].angle - steer->angle();
-    if (err > 3.14159265f) err -= 6.28318531f;
-    if (err < -3.14159265f) err += 6.28318531f;
-    if (err > params_.steer_deadband || err < -params_.steer_deadband) {
-      auto *pid = GetPidMotorSteer(i);
-      if (pid != nullptr) {
-        steer_raw = pid->update(ws[i].angle, steer->angle(), kDt);
-      }
-    }
-    steer_raw = Clamp(steer_raw, -params_.steer_raw_limit, params_.steer_raw_limit);
-    steer->setInput(steer_raw);
+    /* ---- 舵向角度环 ---- */
+    const float steer_raw_limit = params_.steer_raw_limit;
+    float err = wheel_state_[i].angle - steer->angle();
+    while (err > kPi) err -= 2.0f * kPi;
+    while (err < -kPi) err += 2.0f * kPi;
 
-    /* 轮速：逆解给的是轮心线速度 m/s，折算成电机输出端角速度 rad/s */
-    float wheel_vel_target = ws[i].speed / 0.066f;
-    wheel_vel_target =
-        Clamp(wheel_vel_target, -params_.max_wheel_vel, params_.max_wheel_vel);
-    float wheel_raw = 0.0f;
+    auto *pid = GetPidMotorSteer(i);
+    float steer_raw = 0.0f;
+    if (pid != nullptr) {
+      /* 无条件调用，保证 PID 的 dt 契约（P2-14 / G-2：跳拍会把 D 项放大 N 倍） */
+      steer_raw = pid->update(wheel_state_[i].angle, steer->angle(), kDt);
+    }
+    if (err < params_.steer_deadband && err > -params_.steer_deadband) {
+      /* 死区内不切断输出，而是保持上一拍的值：
+       * 舵轮带 caster 力，切 0 会让它漂回零位、再被拉回，形成极限环抖动。 */
+      steer_raw = steer_hold_[i];
+    } else {
+      steer_hold_[i] = steer_raw;
+    }
+    steer->setInput(Clamp(steer_raw, -steer_raw_limit, steer_raw_limit));
+
+    /* ---- 轮速环 ----
+     * 逆解已经把轮心线速度按 params_.wheel_radius 折算成「输出端 rad/s」，
+     * 与 wheel->vel() 同域。这里**绝不能**再除一次轮半径
+     * （旧代码这样写导致整定当天实际车速为指令的约 15 倍）。 */
+    const float wheel_vel_target = Clamp(wheel_state_[i].speed,
+                                         -params_.max_wheel_vel, params_.max_wheel_vel);
     auto *pidw = GetPidMotorWheel(i);
+    float wheel_raw = 0.0f;
     if (pidw != nullptr) {
       wheel_raw = pidw->update(wheel_vel_target, wheel->vel(), kDt);
     }
-    wheel_raw = Clamp(wheel_raw, -params_.wheel_raw_limit, params_.wheel_raw_limit);
-    wheel->setInput(wheel_raw);
+    wheel->setInput(Clamp(wheel_raw, -params_.wheel_raw_limit, params_.wheel_raw_limit));
   }
 }
 

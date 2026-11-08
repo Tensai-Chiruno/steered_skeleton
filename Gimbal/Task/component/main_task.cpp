@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
 #include "ins_comm.hpp"
+#include "ins_imu.hpp"
 #include "ins_robot.hpp"
 #include "robot.hpp"
 #include "gimbal.hpp"
@@ -50,14 +51,18 @@ void MainTaskInit(void) {
   GetGimbal()->init();
   GetRobot()->registerGimbal(GetGimbal());
   GetRobot()->registerRemoteControl(GetRemoteControl());
+  /* IMU 在主上下文预热一次：imuInit() 内含 HAL_Delay，绝不能第一次就在中断里跑（G-4） */
+  (void)GetImu();
+  GetRobot()->registerImu(GetImu());
+  GetRobot()->registerComm(GetGimbalChassisComm());
   GetRobot()->init();
 
 }
 
 void MainTask(void) {
-  /* 1 ms 控制周期。
-   * TODO【第 6/8 项】: 云台关节位置环（yaw/pitch 位置环，pitch 需反馈限位）。
-   * 目前为空：没有状态机与 PID 实例时下发位置指令缺安全前提。 */
+  /* 1 ms 控制周期：读数据 -> 状态迁移 -> 生成指令 -> 下发。
+   * 安全前提（急停/模式/在线判定）全部在 Robot 里，这里只做一次调用。 */
+  GetRobot()->update();
 }
 
 /* Private function definitions ----------------------------------------------*/

@@ -48,7 +48,7 @@ constexpr float kPitchOffset = 2.91772f;
 
 /** yaw / pitch 所在总线。按实车拓扑图：CAN2 是主干总线，
  *  Yaw(0x01) 与 Pitch(0x02) 都挂 CAN2，与双板通讯同一条总线。
- *  两者 ID 段不冲突（电机反馈 0x11/0x12，双板 0x101/0x102）。 */
+ *  两者 ID 段不冲突（电机反馈 0x11/0x12，双板 0x210/0x211）。 */
 CAN_HandleTypeDef *const kMotorBus = &hcan2;
 
 }  // namespace
@@ -142,7 +142,7 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
     return;
   }
 
-  /* 未命中：双板通讯帧（0x101 / 0x102）在阶段 4 接入这里。 */
+  /* 未命中：双板通讯帧（0x210 / 0x211）在阶段 4 接入这里。 */
 }
 
 void MotorSendAllCommands(void) {

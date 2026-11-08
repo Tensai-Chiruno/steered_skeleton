@@ -45,8 +45,14 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan);
  * @param       len: 数据长度（字节数，一般 8）
  * @retval      None
  */
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
+bool CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
                   uint8_t len);
+
+/** @brief 累计发送失败次数（邮箱满 / bus-off / 无 ACK）。单板台架无对端时非零属正常。 */
+uint32_t CAN_GetTxFailCount(void);
+
+/** @brief 最近一次发送是否成功。 */
+bool CAN_LastTxOk(void);
 
 #ifdef __cplusplus
 }

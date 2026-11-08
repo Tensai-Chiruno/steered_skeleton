@@ -38,6 +38,10 @@
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 namespace {
+/* ---- 量纲的唯一来源（P0-1）：配置、断言、发送帧 ID 三处都用这两个常量 ---- */
+constexpr hello_world::motor::InputType kWheelInputType = hello_world::motor::InputType::kRaw;
+constexpr hello_world::motor::InputType kSteerInputType = hello_world::motor::InputType::kRaw;
+
 
 constexpr int kWheelNum = 4;  ///< 轮电机（M3508）数量
 constexpr int kSteerNum = 4;  ///< 舵电机（GM6020）数量
@@ -85,7 +89,7 @@ void EnsureInit(void) {
   }
   for (int i = 0; i < kWheelNum; ++i) {
     hello_world::motor::OptionalParams opt;
-    opt.input_type = hello_world::motor::InputType::kCurr;
+    opt.input_type = kWheelInputType;
     opt.dir = static_cast<hello_world::motor::Dir>(kWheelDir[i]);
     opt.ex_redu_rat = 14.0f;              // M3508 外接减速比
     opt.remove_build_in_reducer = true;   // M3508 内置减速器已计入 14，不再重复
@@ -94,7 +98,7 @@ void EnsureInit(void) {
   }
   for (int i = 0; i < kSteerNum; ++i) {
     hello_world::motor::OptionalParams opt;
-    opt.input_type = hello_world::motor::InputType::kCurr;
+    opt.input_type = kSteerInputType;
     opt.dir = static_cast<hello_world::motor::Dir>(kSteerDir[i]);
     opt.ex_redu_rat = 1.0f;               // GM6020 保留内置减速器
     opt.remove_build_in_reducer = false;
@@ -109,9 +113,12 @@ void EnsureInit(void) {
    * 表现为「指令给了电机不动」或「动得很怪」。 */
   HW_ASSERT(hello_world::motor::M3508::GetTxId(1) == 0x200, "wheel tx id");
   HW_ASSERT(hello_world::motor::M3508::GetRxId(1) == 0x201, "wheel rx id");
-  HW_ASSERT(hello_world::motor::GM6020::GetTxId(
-                kSteerId[0], hello_world::motor::InputType::kRaw) == 0x1FF,
-            "steer tx id (kRaw -> 0x1FF)");
+  /* 这条断言必须用「真正配置电机用的那个常量」，否则它恒为真、等于没写
+   * （P0-1：旧写法传的是字面量 kRaw，而 opt.input_type 是 kCurr，两者不一致却没被发现）。 */
+  HW_ASSERT(hello_world::motor::GM6020::GetTxId(kSteerId[0], kSteerInputType) == 0x1FF,
+            "steer tx id must be 0x1FF: input_type and frame must both be kRaw");
+  HW_ASSERT(hello_world::motor::M3508::GetTxId(kWheelId[0]) == 0x200,
+            "wheel tx id must be 0x200");
   HW_ASSERT(hello_world::motor::GM6020::GetRxId(1) == 0x205, "steer rx id");
 
   inited_ = true;
@@ -168,7 +175,7 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
     return;
   }
 
-  /* 未命中：双板通讯帧（0x101 / 0x102）在阶段 4 接入这里。
+  /* 未命中：双板通讯帧（0x210 / 0x211）在阶段 4 接入这里。
    * 现阶段直接丢弃——静默丢弃比误判成电机更安全。 */
 }
 
@@ -199,8 +206,7 @@ void MotorSendAllCommands(void) {
    * 若将来在上位机打开电流环，必须同时把 input_type 改成 kCurr，
    * 只改帧 ID 不改量纲会让指令被差一个比例。 */
   CAN_Send_Msg(kSteerBus, buf,
-               hello_world::motor::GM6020::GetTxId(
-                   kSteerId[0], hello_world::motor::InputType::kRaw),
+               hello_world::motor::GM6020::GetTxId(kSteerId[0], kSteerInputType),
                8);
 }
 

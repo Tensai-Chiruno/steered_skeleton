@@ -64,7 +64,14 @@ void Ahrs::getEulerAngle(float euler_angle[3]) const
   arm_atan2_f32(quat_[0] * quat_[1] + quat_[2] * quat_[3],
                 quat_[0] * quat_[0] + quat_[3] * quat_[3] - 0.5f,
                 euler_angle + 0);
-  euler_angle[1] = asinf(-2.0f * (quat_[1] * quat_[3] - quat_[0] * quat_[2]));
+  /* P2-18：四元数归一化后的浮点残差能让这个量略超 1，asinf 直接给 NaN，
+     * 再顺着一路变成「校验合法但内容为 0」的双板帧。先夹再算。 */
+    {
+      float s = -2.0f * (quat_[1] * quat_[3] - quat_[0] * quat_[2]);
+      if (s > 1.0f) s = 1.0f;
+      if (s < -1.0f) s = -1.0f;
+      euler_angle[1] = asinf(s);
+    }
   arm_atan2_f32(quat_[0] * quat_[3] + quat_[1] * quat_[2],
                 quat_[0] * quat_[0] + quat_[1] * quat_[1] - 0.5f,
                 euler_angle + 2);

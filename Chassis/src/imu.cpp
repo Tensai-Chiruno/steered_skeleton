@@ -67,7 +67,7 @@ void Imu::update(void) {
 
   bmi088_.getData(acc_, gyro_, &temp_);
 
-  /* 陀螺仪单位换算：BMI088 库输出 rad/s；Mahony 也按 rad/s 使用 */
+  /* 扣陀螺仪零偏（单位说明：BMI088 库与 Mahony 都按 rad/s，这里不做单位换算） */
   for (int i = 0; i < kAxis; ++i) {
     gyro_[i] -= gyro_bias_[i];
   }
@@ -100,6 +100,25 @@ void Imu::update(void) {
       }
       ahrs_.getEulerAngle(euler_);
       yaw_offset_ = euler_[2];  /* 开机位置即 yaw 零点 */
+      ready_ = true;
+      return;
+    }
+    /* ---- S-13：标定超时降级 ----
+     * 上电过程车被搬运/台架在晃时 acc_still 恒假，若不设超时，整机永远进不了 Working，
+     * 现场会误判成「状态机坏了」。超时后放弃零偏标定（bias 保持 0）并置告警位。 */
+    ++calib_ticks_;
+    const uint32_t timeout_ticks =
+        static_cast<uint32_t>(params_.samp_freq * 0.001f * params_.calib_timeout_ms);
+    if (timeout_ticks > 0u && calib_ticks_ >= timeout_ticks) {
+      if (calib_count_ > 0u) {
+        const float n = static_cast<float>(calib_count_);
+        for (int i = 0; i < kAxis; ++i) {
+          gyro_bias_[i] = bias_sum_[i] / n;
+        }
+      }
+      ahrs_.getEulerAngle(euler_);
+      yaw_offset_ = euler_[2];
+      calib_timeout_ = true;
       ready_ = true;
       return;
     }

@@ -380,7 +380,16 @@ class DaMiao : public Motor
   {
     float span = x_max - x_min;
     float offset = x_min;
-    return (uint16_t)((x_float - offset) * ((float)((1 << bits) - 1)) / span);
+/* P2-19：NaN/inf 折 0（上游 Bound() 挡不住非有限值），span=0 也兜住，
+       * 并且四舍五入而不是截断。 */
+      if (!(x_float == x_float)) return (uint16_t)0u;
+      if (!(span > 1e-9f) && !(span < -1e-9f)) return (uint16_t)0u;
+      float r_out = (x_float - offset) * ((float)((1 << bits) - 1)) / span;
+      if (!(r_out == r_out)) return (uint16_t)0u;
+      if (r_out <= 0.0f) return (uint16_t)0u;
+      const float top_out = (float)((1u << bits) - 1u);
+      if (r_out >= top_out) return (uint16_t)top_out;
+      return (uint16_t)(r_out + 0.5f);
   }
 
   /**

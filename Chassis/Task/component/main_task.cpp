@@ -22,6 +22,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
 #include "ins_comm.hpp"
+#include "ins_imu.hpp"
 #include "ins_robot.hpp"
 #include "robot.hpp"
 #include "chassis.hpp"
@@ -42,7 +43,7 @@ void MainTaskInit(void) {
     (void)GetMotorSteer(i);
   }
 
-  /* 2) 双板通讯对象（构造时就绑定 0x101/0x102 与 CAN2） */
+  /* 2) 双板通讯对象（构造时就绑定 0x210/0x211 与 CAN2） */
   (void)GetGimbalChassisComm();
   (void)GetRemoteControl();  // 两板都收 DBUS
 
@@ -55,14 +56,18 @@ void MainTaskInit(void) {
   GetChassis()->init();
   GetRobot()->registerChassis(GetChassis());
   GetRobot()->registerRemoteControl(GetRemoteControl());
+  /* IMU 在主上下文预热一次：imuInit() 内含 HAL_Delay，绝不能第一次就在中断里跑（G-4） */
+  (void)GetImu();
+  GetRobot()->registerImu(GetImu());
+  GetRobot()->registerComm(GetGimbalChassisComm());
   GetRobot()->init();
 
 }
 
 void MainTask(void) {
-  /* 1 ms 控制周期。
-   * TODO【第 6/7 项】: robot->update()（读数据 → 状态迁移 → 生成指令）。
-   * 目前为空：没有状态机时任何指令下发都缺安全前提（急停/模式）。 */
+  /* 1 ms 控制周期：读数据 -> 状态迁移 -> 生成指令 -> 下发。
+   * 安全前提（急停/模式/在线判定）全部在 Robot 里，这里只做一次调用。 */
+  GetRobot()->update();
 }
 
 /* Private function definitions ----------------------------------------------*/

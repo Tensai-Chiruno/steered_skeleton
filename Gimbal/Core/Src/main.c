@@ -107,12 +107,14 @@ int main(void)
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_TIM_Base_Start_IT(&htim2);
-  HAL_TIM_Base_Start_IT(&htim6);
-  /* 一次性初始化：yaw/pitch 电机对象 + CAN 滤波器/外设 + 接收中断。
-   * 放在中断启动之后调用也无竞态问题——但必须早于第一帧反馈到达，
-   * 否则 decode 会落在未初始化的对象上。 */
+  /* P2-20：htim2 只当自由计数器用，不需要中断。 */
+  HAL_TIM_Base_Start(&htim2);
+
+  /* P1-1：先把对象与 CAN 全部初始化完，再开 1 ms 中断，避免 TIM6 抢占主上下文
+   * （否则 CommTask 可能在 HAL_CAN_Start 之前发帧、EnsureInit 可能被 ISR 重入）。 */
   MainTaskInit();
+
+  HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
 
   /* Infinite loop */

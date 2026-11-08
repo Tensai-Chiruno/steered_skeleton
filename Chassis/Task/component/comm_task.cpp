@@ -58,8 +58,9 @@ void CommTask(void) {
 
   /* 2) 双板帧：把本板状态编码后发到 CAN2 */
   robot::GimbalChassisComm *bc = GetGimbalChassisComm();
-  bc->local().online = 1;
-  bc->local().ready = 0;
+  /* P1-3：online / ready / work_mode / ctrl_mode 由数据拥有者（Robot）每拍写入，
+   * 这里**不能**再无条件覆盖——旧代码每 1 ms 写一次 online=1 / ready=0，
+   * 表现为「online 永远自报在线（反诊断）」且「别人写的 ready 下一拍就被清掉」。 */
   uint8_t buf[8];
   bc->encode(buf);
   CAN_Send_Msg(&hcan2, buf, bc->tx_id(), 8);
@@ -89,4 +90,24 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
   if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
     HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
   }
+}
+
+/**
+ * @brief UART 错误回调（P1-7）
+ * @note  PE/FE/NE/ORE 任一发生时 HAL 会中止 DMA 接收并且**不再**进 RxEventCallback，
+ *        所以「在 RxEventCallback 里检查 RxState 重新挂载」这条兜底永远等不到机会 ——
+ *        遥控器会因为一次噪声错误而永久失联，直到重启。这里必须重新挂载。
+ */
+extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  if (huart != &huart3) {
+    return;
+  }
+  __HAL_UART_CLEAR_OREFLAG(huart);
+  __HAL_UART_CLEAR_NEFLAG(huart);
+  __HAL_UART_CLEAR_FEFLAG(huart);
+  __HAL_UART_CLEAR_PEFLAG(huart);
+  HAL_UART_DMAStop(huart);
+  huart->ErrorCode = HAL_UART_ERROR_NONE;
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
 }

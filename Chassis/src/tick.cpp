@@ -47,7 +47,7 @@ std::chrono::microseconds start_tick_us =
 /* Exported function definitions ---------------------------------------------*/
 #if defined(USE_UNIX_TICK)
 
-uint32_t GetTickUs(void)
+uint64_t GetTickUs(void)
 {
   auto now = std::chrono::system_clock::now();
   auto tick =
