@@ -42,8 +42,12 @@ namespace {
 constexpr int kWheelNum = 4;  ///< 轮电机（M3508）数量
 constexpr int kSteerNum = 4;  ///< 舵电机（GM6020）数量
 
-/** 各电机组所在的总线。实机接线若不同，只改这两行。 */
-CAN_HandleTypeDef *const kWheelBus = &hcan1;
+/** 各电机组所在的总线。**按实车拓扑图**（2026-11-08 用户提供）：
+ *    CAN2 = 主干：轮电机 M3508、Yaw、摩擦轮、拨弹、以及双板通讯
+ *    CAN1 = 只在底盘侧，仅挂 4 台舵电机 GM6020
+ *  所以轮电机在 CAN2、舵电机在 CAN1。两者不同总线，LocateMotor 用总线区分是成立的。
+ *  实机若与此不符，只改这两行。 */
+CAN_HandleTypeDef *const kWheelBus = &hcan2;
 CAN_HandleTypeDef *const kSteerBus = &hcan1;
 
 /* 轮电机：id 1~4，外接减速比 14，且不自带减速器 */

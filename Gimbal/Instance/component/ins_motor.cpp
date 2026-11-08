@@ -40,8 +40,10 @@ namespace {
 constexpr uint8_t kYawId = 1;    ///< yaw 关节 DM-J4310 的 CAN id
 constexpr uint8_t kPitchId = 2;  ///< pitch 关节 DM-J4310 的 CAN id
 
-/** yaw / pitch 所在总线。实机接线若不同，只改这一行。 */
-CAN_HandleTypeDef *const kMotorBus = &hcan1;
+/** yaw / pitch 所在总线。按实车拓扑图：CAN2 是主干总线，
+ *  Yaw(0x01) 与 Pitch(0x02) 都挂 CAN2，与双板通讯同一条总线。
+ *  两者 ID 段不冲突（电机反馈 0x11/0x12，双板 0x101/0x102）。 */
+CAN_HandleTypeDef *const kMotorBus = &hcan2;
 
 }  // namespace
 
