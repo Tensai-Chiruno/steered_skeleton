@@ -21,6 +21,7 @@
 #include "HW_can.hpp"
 
 #include "can.h"
+#include "ins_motor.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -81,29 +82,27 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   if (hcan == &hcan1) {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header1,
                              can1_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 在此按 rx_header1.StdId 路由 8 字节 can1_rx_data。
-       * 判定方法：把 StdId 与各电机的接收 ID（GetRxId）及双板通讯帧 ID 逐一比对：
-       *   - 命中某电机的接收 ID：调用该电机 decode(can1_rx_data) 解包反馈；
-       *   - 命中双板通讯帧 ID：调用自己的 GimbalChassisComm 解码；
-       *   - 都未命中：丢弃（返回前记得重新使能接收中断，见下方调用）。
-       */
+      /* 按帧 ID 路由到对应电机；未命中的 ID 由分发函数静默丢弃。
+       * 真正的「ID → 哪个电机」映射表在 Instance/component/ins_motor.cpp，
+       * 这里只负责把帧原样交出去——通信原语不该知道总线上挂了哪些设备。 */
+      MotorDispatchCanFrame(hcan, rx_header1.StdId, can1_rx_data);
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
 }
 
 /**
- * @brief   CAN2 FIFO1 接收中断回调（新人填写分发逻辑）
+ * @brief   CAN2 FIFO1 接收中断回调
  * @param   hcan: CAN 句柄
  * @retval  None
- * @note    同上，具体分发由新人实现
+ * @note    路由逻辑与 FIFO0 相同，只是总线不同
  */
 void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   if (hcan == &hcan2) {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
                              can2_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
+      MotorDispatchCanFrame(hcan, rx_header2.StdId, can2_rx_data);
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);

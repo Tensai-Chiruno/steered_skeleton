@@ -28,12 +28,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
-/* TODO【新人任务】:
- * 在此 include 任务层头文件，例如 #include "main_task.hpp"，
- * 它声明了 extern "C" 的 MainTaskInit(void) / MainTask(void)。
- */
-
+#include "main_task.hpp"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -112,6 +107,10 @@ int main(void) {
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_TIM_Base_Start_IT(&htim6);
+  /* 一次性初始化：建立电机对象 + CAN 滤波器/外设 + 接收中断。
+   * 必须在 htim6 启动之后调用也可以，但放在这里能让「初始化」与「第 1 个 1 ms
+   * 中断」之间不存在竞态：中断一旦跑起来就会访问电机对象。 */
+  MainTaskInit();
   /* USER CODE END 2 */
 
   /* Infinite loop */

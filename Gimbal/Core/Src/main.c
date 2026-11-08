@@ -28,12 +28,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
-/* TODO【新人任务】:
- * 在此 include 任务层头文件，例如 #include "main_task.hpp"，
- * 它声明了 extern "C" 的 MainTaskInit(void) / MainTask(void)。
- */
-
+#include "main_task.hpp"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -114,6 +109,10 @@ int main(void)
 
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_TIM_Base_Start_IT(&htim6);
+  /* 一次性初始化：yaw/pitch 电机对象 + CAN 滤波器/外设 + 接收中断。
+   * 放在中断启动之后调用也无竞态问题——但必须早于第一帧反馈到达，
+   * 否则 decode 会落在未初始化的对象上。 */
+  MainTaskInit();
   /* USER CODE END 2 */
 
   /* Infinite loop */

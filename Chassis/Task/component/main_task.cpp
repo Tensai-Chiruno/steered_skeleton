@@ -1,12 +1,19 @@
 /**
  *******************************************************************************
  * @file      :main_task.cpp
- * @brief     :
+ * @brief     :任务层入口（1 ms 控制/通讯调度）
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 阶段 1 最小接线：初始化 + 周期分发
  *******************************************************************************
  * @attention :
+ *  【本文件当前只做到「能跑起来」的程度】
+ *    阶段 1 的目标是电机反馈能读、指令能发，所以这里只接了：
+ *      MainTaskInit() → 建立电机对象 + 通讯初始化
+ *      htim6 回调     → MainTask() + CommTask()
+ *    MainTask() 内部留空，等第 6/7 项把 Robot/状态机/各管理器接进来。
+ *    现在就在 MainTask 里写控制逻辑，会在没有状态机的前提下堆积一次性代码，
+ *    后面必须整段重写——这是刻意不做的。
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
@@ -14,34 +21,45 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
+
 #include "comm_task.hpp"
+#include "ins_motor.hpp"
+#include "tim.h"
 
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
-  /* TODO【新人任务】:
-   * 一次性初始化（由 main() 在 while(1) 之前调用一次）：
-   *   1. 通过 Instance 层的 GetXxx() 拿到电机 / IMU / 遥控器 / 双板通讯 / Robot 等对象，
-   *      按依赖顺序完成初始化（电机使能、IMU 零漂采集、CAN 滤波器等）。
-   *   2. 把各模块注册进 Robot（registerXxx）。
-   *   3. 调用 CommTaskInit() 完成通讯初始化（UART 接收、IWDG 等）。
-   * 注意：不要在这里写任何周期性逻辑。
-   */
+  /* 1) 建立全部电机对象并完成参数配置。
+   *    EnsureInit() 在第一次访问 GetMotorXxx 时懒执行，这里主动访问一次，
+   *    让「初始化」发生在 while(1) 之前，而不是在第一个中断里。 */
+  for (int i = 0; i < 4; ++i) {
+    (void)GetMotorWheel(i);
+    (void)GetMotorSteer(i);
+  }
+
+  /* 2) 通讯初始化：CAN 滤波器 + 启动外设 + 打开接收中断 */
+  CommTaskInit();
+
+  /* TODO【第 3 项】: IMU 零漂采集（须在电机使能之后、状态机之前） */
+  /* TODO【第 6 项】: 把各模块注册进 Robot */
 }
 
 void MainTask(void) {
-  /* TODO【新人任务】:
-   * 1ms 控制周期入口：调用 robot->update()，由状态机完成
-   * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。
-   * 保持薄薄一层，不要在这里堆业务逻辑。
-   */
+  /* 1 ms 控制周期。
+   * TODO【第 6/7 项】: robot->update()（读数据 → 状态迁移 → 生成指令）。
+   * 目前为空：没有状态机时任何指令下发都缺安全前提（急停/模式）。 */
 }
 
 /* Private function definitions ----------------------------------------------*/
-/* TODO【新人任务】:
- * 实现 htim6 周期中断回调 HAL_TIM_PeriodElapsedCallback：
- *   - 先判中断来自 htim6（避免把别的定时器中断误当成 1ms tick）；
- *   - 再调用 MainTask() 与 CommTask()。
- * 注意：
- *   - main.c 已 HAL_TIM_Base_Start_IT(&htim6)，这里只需补中断里的分发；
- *   - HAL 回调是 C 链接，需用 extern "C" 包裹，否则中断里找不到符号。
+
+/**
+ * @brief  TIM6 周期中断回调（1 ms）
+ * @note   TIM2 也用 HAL 定时器中断（底盘板 main.c 里启动了 htim2 与 htim6），
+ *         所以必须先判来源，否则别的定时器溢出会当成 1 ms tick，
+ *         表现为「PID 周期莫名其妙变快」。
  */
+extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+  if (htim == &htim6) {
+    MainTask();
+    CommTask();
+  }
+}

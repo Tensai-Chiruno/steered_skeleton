@@ -1,12 +1,17 @@
 /**
  *******************************************************************************
  * @file      :main_task.cpp
- * @brief     :
+ * @brief     :云台板任务层入口（1 ms 控制/通讯调度）
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 阶段 1 最小接线：初始化 + 周期分发
  *******************************************************************************
  * @attention :
+ *  【本文件当前只做到「能跑起来」的程度】
+ *    阶段 1 的目标是 yaw/pitch 反馈能读、指令能发，所以这里只接了：
+ *      MainTaskInit() → 建立电机对象 + 通讯初始化
+ *      htim6 回调     → MainTask() + CommTask()
+ *    MainTask() 内部留空，等第 6/7/8 项把 Robot/状态机/云台位置环接进来。
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
@@ -14,34 +19,40 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
+
 #include "comm_task.hpp"
+#include "ins_motor.hpp"
+#include "tim.h"
 
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
-  /* TODO【新人任务】:
-   * 一次性初始化（由 main() 在 while(1) 之前调用一次）：
-   *   1. 通过 Instance 层的 GetXxx() 拿到电机 / IMU / 遥控器 / 双板通讯 / Robot 等对象，
-   *      按依赖顺序完成初始化（电机使能、IMU 零漂采集、CAN 滤波器等）。
-   *   2. 把各模块注册进 Robot（registerXxx）。
-   *   3. 调用 CommTaskInit() 完成通讯初始化（UART 接收、IWDG 等）。
-   * 注意：不要在这里写任何周期性逻辑。
-   */
+  /* 1) 建立 yaw / pitch 电机对象（DM 电机失能状态下不会有反馈，
+   *    使能指令由 encode() 在 CommTask 周期里自动插入） */
+  (void)GetMotorYaw();
+  (void)GetMotorPitch();
+
+  /* 2) 通讯初始化：CAN 滤波器 + 启动外设 + 接收中断 */
+  CommTaskInit();
+
+  /* TODO【第 3 项】: IMU 零漂采集 */
+  /* TODO【第 9 项】: 双板通讯对象创建 */
 }
 
 void MainTask(void) {
-  /* TODO【新人任务】:
-   * 1ms 控制周期入口：调用 robot->update()，由状态机完成
-   * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。
-   * 保持薄薄一层，不要在这里堆业务逻辑。
-   */
+  /* 1 ms 控制周期。
+   * TODO【第 6/8 项】: 云台关节位置环（yaw/pitch 位置环，pitch 需反馈限位）。
+   * 目前为空：没有状态机与 PID 实例时下发位置指令缺安全前提。 */
 }
 
 /* Private function definitions ----------------------------------------------*/
-/* TODO【新人任务】:
- * 实现 htim6 周期中断回调 HAL_TIM_PeriodElapsedCallback：
- *   - 先判中断来自 htim6（避免把别的定时器中断误当成 1ms tick）；
- *   - 再调用 MainTask() 与 CommTask()。
- * 注意：
- *   - main.c 已 HAL_TIM_Base_Start_IT(&htim6)，这里只需补中断里的分发；
- *   - HAL 回调是 C 链接，需用 extern "C" 包裹，否则中断里找不到符号。
+
+/**
+ * @brief  TIM6 周期中断回调（1 ms）
+ * @note   先判来源：云台板同样启动了多个定时器，误判会让「1 ms 周期」失真。
  */
+extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+  if (htim == &htim6) {
+    MainTask();
+    CommTask();
+  }
+}
