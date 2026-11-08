@@ -42,3 +42,8 @@ Thumbs.db
 # *.ioc : CubeMX 工程是"引脚/外设配置"的唯一可追溯来源，评审要看，必须提交
 # pc_test/ : 主机端测试台是验证证据，必须提交（但它不在任何 CMake glob 路径里，
 #            所以不会被编进固件；详见 pc_test/README.md）
+#            —— 只忽略它编译出来的东西，源码一律提交
+pc_test/*.exe
+pc_test/*.obj
+pc_test/*.pdb
+pc_test/*.ilk
