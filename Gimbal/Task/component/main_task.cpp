@@ -19,6 +19,10 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
+#include "ins_comm.hpp"
+#include "ins_robot.hpp"
+#include "robot.hpp"
+#include "gimbal.hpp"
 
 #include "comm_task.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
@@ -42,6 +46,12 @@ void MainTaskInit(void) {
 
   /* TODO【第 3 项】: IMU 零漂采集 */
   /* TODO【第 9 项】: 双板通讯对象创建 */
+  /* ---- 状态机与运动模块接线（遥控在线判定 + 生命状态机） ---- */
+  GetGimbal()->init();
+  GetRobot()->registerGimbal(GetGimbal());
+  GetRobot()->registerRemoteControl(GetRemoteControl());
+  GetRobot()->init();
+
 }
 
 void MainTask(void) {

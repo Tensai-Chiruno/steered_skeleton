@@ -1,46 +1,76 @@
 /**
  *******************************************************************************
  * @file      :robot.hpp
- * @brief     :
+ * @brief     :云台板顶层状态机
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
-/* Define to prevent recursive inclusion -------------------------------------*/
+
 #ifndef GIMBAL_ROBOT_MODULES_ROBOT_HPP_
 #define GIMBAL_ROBOT_MODULES_ROBOT_HPP_
 
 /* Includes ------------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* Exported types ------------------------------------------------------------*/
-/* Exported variables --------------------------------------------------------*/
-/* Exported function prototypes ----------------------------------------------*/
+#include "DT7.hpp"
+#include "gimbal.hpp"
+#include "module_state.hpp"
 
-/* ============================================================================
- * 【新人任务】声明云台板顶层状态机类 Robot（namespace robot）。
+namespace robot {
+
+/**
+ * @brief 云台板顶层状态机：1 kHz 入口。
  *
- * 你要做：
- *   1. 设计 Robot 类，作为本板每个控制周期的入口：汇总云台目标角度（来自遥控器 /
- *      键鼠 / 底盘经双板通讯传来的期望值）、IMU 姿态、电机反馈，生成 yaw / pitch
- *      控制指令。
- *   2. 实现「生命状态」三态切换：Dead → Resurrection → Working，并定义各状态
- *      进入 / 退出时的复位动作。
- *   3. 提供注册各模块指针的接口（Gimbal、Imu、yaw / pitch 电机、GimbalChassisComm），
- *      并在每个周期按正确顺序更新数据。
- *
- * 约束 / 提示：
- *   - 与底盘板之间只能通过 GimbalChassisComm 的
- *     CAN 帧交换信息，不能直接互相调用函数或共享变量。
- *   - 控制周期入口由 Task/component/main_task.cpp 的定时中断调用，本类自己不要开中断、
- *     不要死等延时。
- *   - 急停：遥控器拨到急停位时，必须保证所有电机指令归零（硬性验收项）。
- *   - 状态机的基类 / 迁移机制要自己设计，本骨架不提供（裁判系统 / 超电 / 蜂鸣器等组件本骨架也没有，可忽略）。
- * ==========================================================================*/
+ * 生命状态迁移与底盘板一致（Dead / Resurrection / Working），
+ * 但输出对象换成云台两轴力矩。右摇杆控制 yaw，左摇杆上下控制 pitch。
+ */
+class Robot {
+ public:
+  struct Params {
+    uint32_t rc_timeout_ms = 100;
+    uint32_t resurrection_hold_ms = 500;
+    float max_yaw_rate = 3.0f;    ///< rad/s
+    float max_pitch_rate = 2.0f;  ///< rad/s
+    float pitch_min = -0.60f;     ///< rad
+    float pitch_max = 0.90f;      ///< rad
+    float remote_deadband = 0.02f;
+  };
+
+  void init(void);
+  void registerRemoteControl(hello_world::remote_control::DT7 *rc) { rc_ = rc; }
+  void registerGimbal(Gimbal *gimbal) { gimbal_ = gimbal; }
+  void update(void);
+
+  LifeState lifeState(void) const { return life_state_; }
+  GimbalMode gimbalMode(void) const { return mode_; }
+  const GimbalMotion &gimbalMotion(void) const { return motion_; }
+  bool isEmergencyStop(void) const { return estop_; }
+
+ private:
+  void updateRemote(void);
+  void updateLifeState(uint32_t now);
+  void enterDead(void);
+  void enterResurrection(uint32_t now);
+  void enterWorking(void);
+  void updateMotion(void);
+  static float Deadband(float v, float db);
+
+  Params params_{};
+  hello_world::remote_control::DT7 *rc_ = nullptr;
+  Gimbal *gimbal_ = nullptr;
+
+  LifeState life_state_ = LifeState::kDead;
+  GimbalMode mode_ = GimbalMode::kJoint;
+  GimbalMotion motion_{};
+  bool rc_online_ = false;
+  bool estop_ = true;
+  uint32_t resurrection_start_ms_ = 0;
+  bool inited_ = false;
+};
+
+}  // namespace robot
+
 #endif /* GIMBAL_ROBOT_MODULES_ROBOT_HPP_ */

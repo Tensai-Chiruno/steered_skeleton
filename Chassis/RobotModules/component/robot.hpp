@@ -1,45 +1,90 @@
 /**
  *******************************************************************************
  * @file      :robot.hpp
- * @brief     :
+ * @brief     :底盘板顶层状态机
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
-/* Define to prevent recursive inclusion -------------------------------------*/
+
 #ifndef CHASSIS_ROBOT_MODULES_ROBOT_HPP_
 #define CHASSIS_ROBOT_MODULES_ROBOT_HPP_
 
 /* Includes ------------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* Exported types ------------------------------------------------------------*/
-/* Exported variables --------------------------------------------------------*/
-/* Exported function prototypes ----------------------------------------------*/
+#include "DT7.hpp"
+#include "chassis.hpp"
+#include "module_state.hpp"
 
-/* ============================================================================
- * 【新人任务】声明底盘板顶层状态机类 Robot（namespace robot）。
+namespace robot {
+
+/**
+ * @brief 底盘板顶层状态机：1 kHz 入口，负责「读数 → 状态 → 模式 → 指令」。
  *
- * 你要做：
- *   1. 设计 Robot 类，作为本板每个控制周期（1ms）的入口：汇总各模块数据，
- *      生成控制指令并下发给执行部件。
- *   2. 实现「生命状态」三态切换：Dead（上电未就绪 / 离线）→ Resurrection（恢复
- *      自检）→ Working（正常控制），并定义各状态进入 / 退出时的复位动作。
- *   3. 在 Working 态下按手动控制源与工作模式（分离 / 随动 / 小陀螺）生成底盘运动指令。
- *   4. 提供注册各模块指针的接口（Chassis、Imu、4 轮电机、4 舵电机、GimbalChassisComm），并在每个周期按正确顺序更新数据。
- *
- * 约束 / 提示：
- *   - 底盘板与云台板之间只能通过 GimbalChassisComm 的
- *     CAN 帧交换信息，不能直接互相调用函数或共享变量。
- *   - 控制周期入口由 Task/component/main_task.cpp 的定时中断调用，本类自己不要开中断、
- *     不要死等延时。
- *   - 急停：遥控器拨到急停位时，必须保证所有电机指令归零（硬性验收项）。
- *   - 状态机的基类 / 迁移机制要自己设计，本骨架不提供（裁判系统 / 超电 / 蜂鸣器等组件本骨架也没有，可忽略）。
- * ==========================================================================*/
+ * 生命状态迁移：
+ *   Dead --(遥控在线 且 左拨杆不在最下)--> Resurrection --(保持 500 ms)--> Working
+ *   Working --(遥控离线 或 左拨杆最下)--> Dead
+ * 急停：左拨杆最下。任何非 Working 状态都强制底盘输出为 0。
+ */
+class Robot {
+ public:
+  struct Params {
+    uint32_t rc_timeout_ms = 100;       ///< 遥控器离线阈值
+    uint32_t resurrection_hold_ms = 500;///< 恢复自检保持时间
+    float max_vx = 2.0f;                ///< m/s
+    float max_vy = 2.0f;                ///< m/s
+    float max_w_manual = 6.0f;          ///< rad/s，遥控器手动自转
+    float gyro_w = 8.0f;                ///< rad/s，小陀螺常值
+    float follow_kp = 3.0f;             ///< 跟随模式 δ -> w 的比例系数
+    float remote_deadband = 0.02f;      ///< 摇杆死区（归一化）
+  };
+
+  void init(void);
+  void registerRemoteControl(hello_world::remote_control::DT7 *rc) { rc_ = rc; }
+  void registerChassis(Chassis *chassis) { chassis_ = chassis; }
+
+  /** @brief 跟随模式的角度误差 δ（云台朝向 - 车头朝向），由双板帧喂入。 */
+  void setYawError(float delta) { yaw_error_ = delta; }
+
+  void update(void);
+
+  LifeState lifeState(void) const { return life_state_; }
+  ChassisMode chassisMode(void) const { return mode_; }
+  CtrlSource ctrlSource(void) const { return ctrl_source_; }
+  const ChassisMotion &chassisMotion(void) const { return motion_; }
+  bool isEmergencyStop(void) const { return estop_; }
+  bool isRemoteOnline(void) const { return rc_online_; }
+
+ private:
+  void updateRemote(void);
+  void updateLifeState(uint32_t now);
+  void enterDead(void);
+  void enterResurrection(uint32_t now);
+  void enterWorking(void);
+  void updateMode(void);
+  void updateMotion(void);
+
+  static float Deadband(float v, float db);
+
+  Params params_{};
+  hello_world::remote_control::DT7 *rc_ = nullptr;
+  Chassis *chassis_ = nullptr;
+
+  LifeState life_state_ = LifeState::kDead;
+  ChassisMode mode_ = ChassisMode::kDepart;
+  CtrlSource ctrl_source_ = CtrlSource::kNone;
+  ChassisMotion motion_{};
+  float yaw_error_ = 0.0f;
+
+  bool rc_online_ = false;
+  bool estop_ = false;
+  uint32_t resurrection_start_ms_ = 0;
+  bool inited_ = false;
+};
+
+}  // namespace robot
+
 #endif /* CHASSIS_ROBOT_MODULES_ROBOT_HPP_ */

@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
+#include "ins_comm_state.hpp"
 
 #include "HW_can.hpp"
 #include "can.h"
@@ -87,6 +88,7 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
   }
   if (Size >= kDbusFrameLen) {
     GetRemoteControl()->decode(g_dbus_buf);
+    NotifyRemoteFrame();
 
 /* 新文档的验收方式是「临时屏蔽 CommTask 里的喂狗」，此处不再按数据源喂狗 */
   }

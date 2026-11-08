@@ -1,41 +1,51 @@
 /**
  *******************************************************************************
  * @file      :ins_chassis_iksolver.cpp
- * @brief     :
+ * @brief     :底盘逆解器单例
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
+
 /* Includes ------------------------------------------------------------------*/
 #include "ins_chassis_iksolver.hpp"
-/* Private macro -------------------------------------------------------------*/
+
+#include "chassis_ik_solver.hpp"
+
 /* Private constants ---------------------------------------------------------*/
-/* Private types -------------------------------------------------------------*/
+namespace {
+
+/* 几何参数来自考核说明 6.2（已按实机测量补齐） */
+constexpr float kWheelRadius = 0.066f;
+constexpr float kHalfWheelbase = 0.167f;
+constexpr float kHalfTrack = 0.167f;
+
+/* 舵角变化率上限：先给 8 rad/s（约 1ms 单拍 0.008 rad ≈ 0.46°）。
+ * 台架上看舵机是否还猛打再调。 */
+constexpr float kMaxSteerRate = 8.0f;
+
+}  // namespace
+
 /* Private variables ---------------------------------------------------------*/
-/* External variables --------------------------------------------------------*/
-/* Private function prototypes -----------------------------------------------*/
+namespace {
+hello_world::chassis_ik_solver::ChassisIkSolver g_ik;
+bool g_inited = false;
+}  // namespace
+
 /* Exported function definitions ---------------------------------------------*/
 hello_world::chassis_ik_solver::ChassisIkSolver *GetChassisIkSolver() {
-  /* TODO【新人任务】:
-   * 返回底盘逆解器单例。
-   *
-   * 你要做：
-   *   1. 若把运动学逆解独立成类，在此静态定义并返回地址（类名 / 命名空间可自行调整，
-   *      同步改本文件返回类型）。
-   *   2. 若选择把逆解直接写在 robot::Chassis 里，可让本函数返回 nullptr 并在 Chassis
-   *      内部完成解算，同时删除本文件对该类的依赖。
-   *
-   * 约束 / 提示：
-   *   - 逆解目标：底盘期望速度 (vx, vy, w) → 各轮目标轮速（麦克纳姆）/ 轮速+舵角（舵向）。
-   *   - 逆解公式请自行推导，可参考公开的舵向轮逆运动学资料。
-   */
-  return nullptr;
+  if (!g_inited) {
+    hello_world::chassis_ik_solver::ChassisIkSolver::Params p;
+    p.wheel_radius = kWheelRadius;
+    p.half_wheelbase = kHalfWheelbase;
+    p.half_track = kHalfTrack;
+    p.max_steer_rate = kMaxSteerRate;
+    g_ik.init(p);
+    g_inited = true;
+  }
+  return &g_ik;
 }
-
-/* Private function definitions ----------------------------------------------*/

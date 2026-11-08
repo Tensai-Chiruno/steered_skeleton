@@ -21,6 +21,10 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
+#include "ins_comm.hpp"
+#include "ins_robot.hpp"
+#include "robot.hpp"
+#include "chassis.hpp"
 
 #include "comm_task.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
@@ -47,6 +51,12 @@ void MainTaskInit(void) {
 
   /* TODO【第 3 项】: IMU 零漂采集（须在电机使能之后、状态机之前） */
   /* TODO【第 6 项】: 把各模块注册进 Robot */
+  /* ---- 状态机与运动模块接线（遥控在线判定 + 生命状态机） ---- */
+  GetChassis()->init();
+  GetRobot()->registerChassis(GetChassis());
+  GetRobot()->registerRemoteControl(GetRemoteControl());
+  GetRobot()->init();
+
 }
 
 void MainTask(void) {

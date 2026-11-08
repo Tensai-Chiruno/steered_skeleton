@@ -1,44 +1,50 @@
 /**
  *******************************************************************************
  * @file      :ins_pid.cpp
- * @brief     :
+ * @brief     :PID 实例（Gimbal）
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
+
 /* Includes ------------------------------------------------------------------*/
 #include "ins_pid.hpp"
-/* Private macro -------------------------------------------------------------*/
-/* Private constants ---------------------------------------------------------*/
-/* Private types -------------------------------------------------------------*/
+
+#include "pid.hpp"
+
 /* Private variables ---------------------------------------------------------*/
-/* External variables --------------------------------------------------------*/
-/* Private function prototypes -----------------------------------------------*/
+namespace {
+hello_world::pid::Pid g_pid_yaw;
+hello_world::pid::Pid g_pid_pitch;
+bool g_inited = false;
+
+void EnsureInit(void) {
+  if (g_inited) return;
+  hello_world::pid::Pid::Params p;
+  p.kp = 0.0f;
+  p.ki = 0.0f;
+  p.kd = 0.0f;
+  p.integral_limit = 5.0f;
+  p.output_limit = 0.0f;
+  p.diff_on_measurement = true;
+  p.angle_wrap = true;   /* 两轴都是角度环 */
+  g_pid_yaw.init(p);
+  g_pid_pitch.init(p);
+  g_inited = true;
+}
+}  // namespace
+
 /* Exported function definitions ---------------------------------------------*/
 hello_world::pid::Pid *GetPidMotorYaw() {
-  /* TODO【新人任务】:
-   * 返回对应的 PID 单例。
-   *
-   * 你要做：
-   *   1. 先自己实现一个 PID 类（位置式 / 增量式，含 Kp/Ki/Kd、积分限幅、输出限幅），
-   *      建议单独新建文件，类名放到 hello_world::pid 命名空间并命名为 Pid（或改这里
-   *      的返回类型以匹配你的类名）。
-   *   2. 静态定义各控制回路的 PID 对象并整定参数（考核会检查稳 / 快 / 无超调）。
-   */
-  return nullptr;
+  EnsureInit();
+  return &g_pid_yaw;
 }
 
 hello_world::pid::Pid *GetPidMotorPitch() {
-  /* TODO【新人任务】:
-   * 返回 pitch 关节位置环 PID 单例，做法同 GetPidMotorYaw()。
-   */
-  return nullptr;
+  EnsureInit();
+  return &g_pid_pitch;
 }
-
-/* Private function definitions ----------------------------------------------*/

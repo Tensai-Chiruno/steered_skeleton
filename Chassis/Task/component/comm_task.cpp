@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
+#include "ins_comm_state.hpp"
 
 #include "HW_can.hpp"
 #include "can.h"
@@ -83,6 +84,7 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
   }
   if (Size >= kDbusFrameLen) {
     GetRemoteControl()->decode(g_dbus_buf);
+    NotifyRemoteFrame();
   }
   if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
     HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
