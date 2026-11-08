@@ -46,6 +46,13 @@ if errorlevel 1 (
     set "FAILED=1"
 )
 
+echo [3b/4] Compiling test_chassis_comm.cpp ...
+cl /nologo /EHsc /std:c++17 /utf-8 /O2 /W4 test_chassis_comm.cpp ..\RobotComponents\component\gimbal_chassis_comm_codec.cpp /Fe:test_chassis_comm.exe
+if errorlevel 1 (
+    echo   [FAIL] compile failed: test_chassis_comm
+    set "FAILED=1"
+)
+
 if "!FAILED!"=="1" (
     echo.
     echo RESULT: BUILD FAILED
@@ -59,6 +66,9 @@ test_pid.exe
 if errorlevel 1 set "FAILED=1"
 echo.
 test_chassis_ik.exe
+if errorlevel 1 set "FAILED=1"
+echo.
+test_chassis_comm.exe
 if errorlevel 1 set "FAILED=1"
 
 echo.

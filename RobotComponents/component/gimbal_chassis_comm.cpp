@@ -1,12 +1,16 @@
 /**
  *******************************************************************************
  * @file      :gimbal_chassis_comm.cpp
- * @brief     :
+ * @brief     :底盘↔云台双板 CAN 通讯实现
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 帧打包/解包 + 离线判断
  *******************************************************************************
  * @attention :
+ *  字节布局与缩放全部委托给 gimbal_chassis_comm_codec，本文件只做：
+ *    - 按 code_part 选方向
+ *    - 维护序列号与离线时间戳
+ *    - 校验失败时丢弃且不更新缓存
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
@@ -14,6 +18,7 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "gimbal_chassis_comm.hpp"
+
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -21,42 +26,38 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
-robot::GimbalChassisComm::GimbalChassisComm(robot::GimbalChassisComm::CodePart code_part,
-                                            uint32_t tx_id, uint32_t rx_id) {
-  /* TODO【新人任务】:
-   * 保存 code_part / tx_id / rx_id，并把 last_rx_tick_ 初始化为当前 GetTickMs()。
-   */
-  code_part_ = code_part;
-  tx_id_ = tx_id;
-  rx_id_ = rx_id;
-  last_rx_tick_ = hello_world::tick::GetTickMs();
-}
+robot::GimbalChassisComm::GimbalChassisComm(
+    robot::GimbalChassisComm::CodePart code_part, uint32_t tx_id, uint32_t rx_id)
+    : code_part_(code_part),
+      tx_id_(tx_id),
+      rx_id_(rx_id),
+      last_rx_tick_(hello_world::tick::GetTickMs()) {}
 
 void robot::GimbalChassisComm::encode(uint8_t tx_data[8]) {
-  /* TODO【新人任务】:
-   * 编码己方帧：把本地 ChassisData / GimbalData 按 hpp 里定的字段布局打包进 8 字节。
-   *   - 由 code_part_ 决定打包哪个方向（Chassis → ChassisData，Gimbal → GimbalData）。
-   *   - 浮点量按约定比例缩放成整数，避免丢位；收发两端比例必须一致。
-   *   - 打包完成后由 Task/component/comm_task.cpp 用 tx_id_ 发送。
-   */
-  (void)tx_data;
+  hello_world::comm::PackFrame(local(), seq_, tx_data);
+  seq_ = static_cast<uint8_t>(seq_ + 1);  // 溢出回绕是有意的：对面只比差异
 }
 
 void robot::GimbalChassisComm::decode(const uint8_t rx_data[8]) {
-  /* TODO【新人任务】:
-   * 解码对方帧：把 8 字节按同样布局还原成对方语义，更新本地缓存，并刷新 last_rx_tick_。
-   *   - 严格与 encode() 对称；任何一端偏移写错都会让对面读到错乱数据。
-   *   - 建议先写自测：同一结构 encode 后再 decode 应能还原原值。
-   */
-  (void)rx_data;
+  Frame tmp;
+  if (!hello_world::comm::UnpackFrame(rx_data, &tmp)) {
+    ++bad_frame_count_;
+    return;  // 坏帧不刷新时间戳，让离线判断照常超时
+  }
+
+  /* 写入「对方」那份缓存：底盘板上收到的来自云台，反之亦然 */
+  if (code_part_ == CodePart::Chassis) {
+    gimbal_data_ = tmp;
+  } else {
+    chassis_data_ = tmp;
+  }
+  last_rx_tick_ = hello_world::tick::GetTickMs();
 }
 
 bool robot::GimbalChassisComm::isOffline() const {
-  /* TODO【新人任务】:
-   * 用 GetTickMs() 与 last_rx_tick_ 的差值判断对方是否离线（超过阈值即离线）。
-   * 阈值可自定义（如 100ms），供状态机 / 看门狗判断对方是否还活着。
-   */
-  return false;
+  /* GetTickMs 是 32 位、1 ms 分辨率，减法在无符号域里天然处理回绕 */
+  return (hello_world::tick::GetTickMs() - last_rx_tick_) >
+         kOfflineTimeoutMs;
 }
 
 /* Private function definitions ----------------------------------------------*/
