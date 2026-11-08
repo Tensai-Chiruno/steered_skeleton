@@ -1,6 +1,6 @@
 @echo off
 rem ===========================================================================
-rem  Host-side PID verification - build and run
+rem  Host-side verification - build and run all tests
 rem  Usage: double-click this file, or run  pc_test\build_and_run.bat
 rem  Requires: MSVC from Visual Studio / Build Tools
 rem  Note: this script is NOT part of any board CMake build.
@@ -8,7 +8,7 @@ rem ===========================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-echo [1/3] Locating MSVC environment...
+echo [1/4] Locating MSVC environment...
 set "VCVARS="
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
@@ -24,28 +24,48 @@ if not exist "!VCVARS!" (
     echo          Install the "Desktop development with C++" workload.
     exit /b 1
 )
-echo       !VCVARS!
 call "!VCVARS!" >nul 2>&1
 if errorlevel 1 (
     echo   [FAIL] vcvars64.bat failed.
     exit /b 1
 )
 
-echo [2/3] Compiling test_pid.cpp ...
-cl /nologo /EHsc /std:c++17 /utf-8 /O2 /W4 test_pid.cpp /Fe:test_pid.exe /Fo:test_pid.obj
+set "FAILED=0"
+
+echo [2/4] Compiling test_pid.cpp ...
+cl /nologo /EHsc /std:c++17 /utf-8 /O2 /W4 test_pid.cpp /Fe:test_pid.exe
 if errorlevel 1 (
-    echo   [FAIL] compile failed.
+    echo   [FAIL] compile failed: test_pid
+    set "FAILED=1"
+)
+
+echo [3/4] Compiling test_chassis_ik.cpp ...
+cl /nologo /EHsc /std:c++17 /utf-8 /O2 /W4 test_chassis_ik.cpp ..\Chassis\RobotModules\component\chassis_ik_solver.cpp /Fe:test_chassis_ik.exe
+if errorlevel 1 (
+    echo   [FAIL] compile failed: test_chassis_ik
+    set "FAILED=1"
+)
+
+if "!FAILED!"=="1" (
+    echo.
+    echo RESULT: BUILD FAILED
     exit /b 1
 )
 
-echo [3/3] Running ...
+echo [4/4] Running ...
+
 echo.
 test_pid.exe
-set "RC=%ERRORLEVEL%"
+if errorlevel 1 set "FAILED=1"
 echo.
-if "%RC%"=="0" (
+test_chassis_ik.exe
+if errorlevel 1 set "FAILED=1"
+
+echo.
+if "!FAILED!"=="0" (
     echo RESULT: ALL PASSED
+    exit /b 0
 ) else (
-    echo RESULT: FAILED  exit=%RC%
+    echo RESULT: FAILED
+    exit /b 1
 )
-exit /b %RC%
