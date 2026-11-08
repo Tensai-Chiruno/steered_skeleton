@@ -41,6 +41,8 @@
  *******************************************************************************
  */
 /* Includes ------------------------------------------------------------------*/
+#include "module_state.hpp"
+
 #include "motor_DaMiao.hpp"
 
 #include <string.h>
@@ -429,6 +431,11 @@ Status DaMiao::set_input_type(InputType input_type)
 
 Status DaMiao::setMitInput(float pos_des, float vel_des, float kp, float kd, float torq)
 {
+  /* G-1：位置保持接口只允许在 Working 时调用。
+   * 非 Working 期间 kp != 0 会让电机死守最后目标位，「急停 = 零力矩 ≈ 松掉」失效。
+   * 宁可在这里炸断言（进而被 IWDG 复位），也不要静默进入危险态。 */
+  HW_ASSERT(robot::g_mit_input_allowed, "setMitInput() called outside Working state");
+
   comm_data_.target_ctrl_mode = CtrlMode::kMIT;
   comm_data_.pos_des = NormPeriodData(-kMaxAngle_, kMaxAngle_, pos_des);
   comm_data_.vel_des = Bound(vel_des, -getMaxVel(), getMaxVel());

@@ -14,6 +14,9 @@
 /* Includes ------------------------------------------------------------------*/
 #include "robot.hpp"
 
+#include <cmath>
+
+#include "HW_can.hpp"
 #include "ins_comm_state.hpp"
 #include "tick.hpp"
 
@@ -76,8 +79,35 @@ void Robot::updateRemote(void) {
     estop_ = true;
   }
 
+  /* P1-8①：CAN 发送持续失败 = 对端在、但发不出去（bus-off / 邮箱被重传占满）。
+   * 只在对端"在线"时才判：单板台架没有 ACK，发送失败是常态，不能因此刹车。 */
+  {
+    const uint32_t fail_now = CAN_GetTxFailCount();
+    if (fail_now != last_tx_fail_) {
+      last_tx_fail_ = fail_now;
+      ++tx_fail_streak_;
+    } else if (tx_fail_streak_ > 0u) {
+      --tx_fail_streak_;
+    }
+    if (!peer_offline_ && tx_fail_streak_ >= 20u) {
+      estop_ = true;
+    }
+  }
+
   /* IMU 就绪（P1-2）：未注册、标定未完成、SPI 读失败都不许进 Working。 */
   imu_ready_ = (imu_ != nullptr) && imu_->isReady() && imu_->isOk();
+
+  /* 第 6 项：δ = 云台绝对 yaw − 车头 yaw，两边都是实测角。
+   * 对端离线时不可信，保持 0（此时也已经急停，车不会动）。 */
+  float delta = 0.0f;
+  if (!peer_offline_ && comm_ != nullptr && imu_ != nullptr) {
+    delta = comm_->remote().yaw - imu_->yaw();
+    delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
+  }
+  yaw_error_ = delta;                       /* 跟随模式用 */
+  if (chassis_ != nullptr) {
+    chassis_->setFrameDelta(delta);          /* 前进方向变换用 */
+  }
 }
 
 void Robot::enterDead(void) {

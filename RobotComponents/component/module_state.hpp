@@ -37,6 +37,16 @@ enum class LifeState : uint8_t {
   kWorking = 2,       ///< 正常工作
 };
 
+/**
+ * @brief 是否允许使用「位置保持类」电机接口（如 DaMiao::setMitInput）。
+ *
+ * 只有状态机处于 Working 时才置 true。原因（G-1）：
+ * 达妙的 setInput() 会强制 kp = kd = 0，所以「急停 = 零力矩 ≈ 松掉」成立；
+ * 但一旦有人改用 setMitInput()（kp != 0 做位置保持），电机就会死守最后的目标位，
+ * 急停立刻变成危险态。把这个权限做成全局唯一标志，motor 层可以直接断言。
+ */
+inline volatile bool g_mit_input_allowed = false;
+
 /** 控制源（本次只有遥控器，预留扩展） */
 enum class CtrlSource : uint8_t { kNone = 0, kRemote = 1 };
 

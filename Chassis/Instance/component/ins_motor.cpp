@@ -103,6 +103,11 @@ void EnsureInit(void) {
     opt.ex_redu_rat = 1.0f;               // GM6020 保留内置减速器
     opt.remove_build_in_reducer = false;
     opt.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
+    /* P0-4：这条之前漏了！kSteerOffset[] 只被定义、从未使用，全文件 angle_offset
+     * 出现 0 次。后果是四个舵的反馈零位分别偏 149.7° / -118.5° / 0.42° / 90.8°，
+     * 而逆解给的目标角是以「机械零位」为基准的，两边不同源 → 舵角环从一开始就是错的。
+     * GCC 对 C++ 的 constexpr 数组默认不报 -Wunused-const-variable，所以编译器不吭声。 */
+    opt.angle_offset = kSteerOffset[i];
     steer_[i].init(kSteerId[i], opt);
   }
 

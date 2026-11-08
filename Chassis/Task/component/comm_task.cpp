@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
+#include "main_task.hpp"
 #include "ins_comm_state.hpp"
 
 #include "HW_can.hpp"
@@ -68,7 +69,12 @@ void CommTask(void) {
 #if IWDG_FEED_IN_COMM_TASK
   /* 正常形态：CommTask 每 1ms 刷新。验收演示复位时把
    * iwdg_policy.hpp 的 IWDG_FEED_IN_COMM_TASK 改成 0。 */
-  HAL_IWDG_Refresh(&hiwdg);
+  /* P1-8②：喂狗条件里加一条「主上下文还活着」。
+   * 只证明 TIM6 在跳是不够的：Error_Handler() 这类主上下文死循环发生时，
+   * TIM6 照样每 1 ms 抢占并喂狗，看门狗等于关闭。 */
+  if (MainLoopIdleMs() < 200u) {
+    HAL_IWDG_Refresh(&hiwdg);
+  }
 #endif
 }
 

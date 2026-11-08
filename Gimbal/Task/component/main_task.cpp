@@ -29,6 +29,7 @@
 #include "ins_chassis_gimbal_comm.hpp"
 #include "ins_comm.hpp"
 #include "ins_motor.hpp"
+#include "tick.hpp"
 #include "tim.h"
 
 /* Exported function definitions ---------------------------------------------*/
@@ -57,6 +58,23 @@ void MainTaskInit(void) {
   GetRobot()->registerComm(GetGimbalChassisComm());
   GetRobot()->init();
 
+}
+
+namespace {
+volatile uint32_t g_main_loop_ms = 0xFFFFFFFFu;
+bool g_main_loop_seen = false;
+}  // namespace
+
+void MainLoopHeartbeat(void) {
+  g_main_loop_ms = hello_world::tick::GetTickMs();
+  g_main_loop_seen = true;
+}
+
+uint32_t MainLoopIdleMs(void) {
+  if (!g_main_loop_seen) {
+    return 0xFFFFFFFFu;
+  }
+  return hello_world::tick::GetTickMs() - g_main_loop_ms;
 }
 
 void MainTask(void) {

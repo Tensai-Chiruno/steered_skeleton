@@ -124,6 +124,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    MainLoopHeartbeat();  /* P1-8②：主上下文活性心跳 */
   }
   /* USER CODE END 3 */
 }

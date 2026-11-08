@@ -38,7 +38,7 @@ namespace robot {
 class Robot {
  public:
   struct Params {
-    uint32_t rc_timeout_ms = 100;        ///< 遥控器离线阈值
+    /* 遥控离线阈值不在这里：唯一来源是 ins_comm_state.cpp 的 kRemoteTimeoutMs */
     uint32_t resurrection_hold_ms = 1200;///< >= Imu::calib_ms(1000)，与之重复但不矛盾
     float max_vx = 2.0f;                 ///< m/s
     float max_vy = 2.0f;                 ///< m/s
@@ -96,6 +96,8 @@ class Robot {
   bool estop_ = true;
   bool peer_offline_ = true;
   bool imu_ready_ = false;
+  uint32_t last_tx_fail_ = 0;
+  uint32_t tx_fail_streak_ = 0;
   uint32_t resurrection_start_ms_ = 0;
   bool inited_ = false;
 };

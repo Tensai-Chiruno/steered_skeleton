@@ -25,7 +25,7 @@ namespace {
 constexpr uint32_t kC2gId = 0x210;  // 考核说明 3.4 建议值
 constexpr uint32_t kG2cId = 0x211;  // 必须避开 0x200/0x201~0x208/0x01~0x1F
 
-/* 双板通讯固定在 CAN2：CAN1 留给电机。
+/* 双板通讯固定在 CAN2：CAN2 是主干（电机 + 双板帧共用），CAN1 本板未使用。
  * 这样「哪条总线出问题」可以直接从现象判断：电机不动看 CAN1，双板不同步看 CAN2。 */
 CAN_HandleTypeDef *const kBoardBus = &hcan2;
 

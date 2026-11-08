@@ -149,8 +149,15 @@ class Pid {
     }
 
     /* ---------------- 微分项 ---------------- */
+    /* 角度环里 measured 会跨 ±pi（舵角、云台 pitch 都会），
+     * 直接用 measured - last_measured_ 会在过零那一拍产生 ±2*pi 的假跳变，
+     * 变成一脚巨大的 D 输出。测量差同样要回绕。 */
+    float d_meas = measured - last_measured_;
+    if (params_.angle_wrap) {
+      d_meas = WrapPi(d_meas);
+    }
     float deriv_raw = params_.diff_on_measurement
-                          ? -((measured - last_measured_) / dt)
+                          ? -(d_meas / dt)
                           : ((error - last_error_) / dt);
     last_measured_ = measured;
     last_error_ = error;

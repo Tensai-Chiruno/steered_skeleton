@@ -24,6 +24,17 @@ namespace remote_control {
 static const uint16_t kRcOffset = 1024u;
 static const float kRcRatio = 1.0f / 660;
 
+/* P1-11：按 kRcRatio=1/660，满量程 2047 会算出 +1.551，而头文件写的是 [-1,1]。
+ * 在解码出口统一夹到 ±1，让「满舵 = 设计车速」与接收机实际极值无关；
+ * 真实极值仍要在现场记录（判据 I），若确认极值只有 ±1792 再决定要不要改 kRcRatio。 */
+static inline float NormRc(uint16_t raw)
+{
+  float v = (static_cast<float>(raw) - static_cast<float>(kRcOffset)) * kRcRatio;
+  if (v > 1.0f) return 1.0f;
+  if (v < -1.0f) return -1.0f;
+  return v;
+}
+
 /* Exported function definitions ---------------------------------------------*/
 
 void DT7::decode(const uint8_t rx_data[kRcRxDataLen])
@@ -31,15 +42,15 @@ void DT7::decode(const uint8_t rx_data[kRcRxDataLen])
   uint16_t tmp;
 
   tmp = (rx_data[0] | (rx_data[1] << 8)) & 0x07FF;
-  rc_rh_ = (tmp - kRcOffset) * kRcRatio;
+  rc_rh_ = NormRc(tmp);
   tmp = ((rx_data[1] >> 3) | (rx_data[2] << 5)) & 0x07FF;
-  rc_rv_ = (tmp - kRcOffset) * kRcRatio;
+  rc_rv_ = NormRc(tmp);
   tmp = ((rx_data[2] >> 6) | (rx_data[3] << 2) | (rx_data[4] << 10)) & 0x07FF;
-  rc_lh_ = (tmp - kRcOffset) * kRcRatio;
+  rc_lh_ = NormRc(tmp);
   tmp = ((rx_data[4] >> 1) | (rx_data[5] << 7)) & 0x07FF;
-  rc_lv_ = (tmp - kRcOffset) * kRcRatio;
+  rc_lv_ = NormRc(tmp);
   tmp = rx_data[16] | (rx_data[17] << 8);
-  rc_wheel_ = (tmp - kRcOffset) * kRcRatio;
+  rc_wheel_ = NormRc(tmp);  /* 16 位字段，原本可到 97.7 */
 
   rc_l_switch_ = SwitchState(((rx_data[5] >> 4) & 0x000C) >> 2);
   rc_r_switch_ = SwitchState((rx_data[5] >> 4) & 0x0003);

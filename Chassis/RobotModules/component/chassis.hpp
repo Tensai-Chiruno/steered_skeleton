@@ -51,6 +51,11 @@ class Chassis {
 
   void registerIkSolver(hello_world::chassis_ik_solver::ChassisIkSolver *ik) { ik_ = ik; }
 
+  /** @brief 云台坐标系相对车头坐标系的夹角 δ（考核第 6 项：前进方向 = 云台朝向）。
+   *  由 Robot 每拍从「云台绝对 yaw − 车头 yaw」算出并下发；不顺时针为正。 */
+  void setFrameDelta(float delta) { frame_delta_ = delta; }
+  float frameDelta(void) const { return frame_delta_; }
+
   void setTarget(const ChassisMotion &tar) { target_ = tar; }
   const ChassisMotion &target(void) const { return target_; }
 
@@ -73,6 +78,7 @@ class Chassis {
   ChassisMotion target_{};
   hello_world::chassis_ik_solver::ChassisIkSolver::WheelState wheel_state_[4]{};
   float steer_hold_[4] = {0.0f, 0.0f, 0.0f, 0.0f};  ///< 死区内保持的舵输出
+  float frame_delta_ = 0.0f;                        ///< 云台相对车头的夹角 δ
   bool enabled_ = false;
   bool inited_ = false;
 };

@@ -14,6 +14,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "robot.hpp"
 
+#include "HW_can.hpp"
 #include "ins_comm_state.hpp"
 #include "tick.hpp"
 
@@ -63,6 +64,22 @@ void Robot::updateRemote(void) {
              sw == hello_world::remote_control::kSwitchStateMid);
   peer_offline_ = (comm_ == nullptr) ? true : comm_->isOffline();
   if (peer_offline_) estop_ = true;
+
+  /* P1-8①：CAN 发送持续失败 = 对端在、但发不出去（bus-off / 邮箱被重传占满）。
+   * 只在对端在线时才判：单板台架没有 ACK，发送失败是常态，不能因此刹车。 */
+  {
+    const uint32_t fail_now = CAN_GetTxFailCount();
+    if (fail_now != last_tx_fail_) {
+      last_tx_fail_ = fail_now;
+      ++tx_fail_streak_;
+    } else if (tx_fail_streak_ > 0u) {
+      --tx_fail_streak_;
+    }
+    if (!peer_offline_ && tx_fail_streak_ >= 20u) {
+      estop_ = true;
+    }
+  }
+
   imu_ready_ = (imu_ != nullptr) && imu_->isReady() && imu_->isOk();
 }
 
@@ -138,6 +155,9 @@ void Robot::update(void) {
   updateLifeState(now);
   updateMode();
   updateMotion();
+
+  /* G-1：位置保持接口只在 Working 期间开放（motor 层会断言这个标志）。 */
+  robot::g_mit_input_allowed = (life_state_ == LifeState::kWorking);
 
   if (gimbal_ != nullptr) {
     gimbal_->setTarget(motion_);

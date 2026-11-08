@@ -17,12 +17,19 @@
 #define GIMBAL_TASK_MAIN_TASK_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include <stdint.h>  /* 本头文件被 main.c 以 C 方式包含，不能用 <cstdint> */
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* Exported function prototypes ----------------------------------------------*/
 void MainTaskInit(void);
 void MainTask(void);
+
+/** @brief 主循环每转一圈调一次，用于「主上下文活性」检查（P1-8）。 */
+void MainLoopHeartbeat(void);
+
+/** @brief 距离上次主循环心跳的毫秒数；从未心跳过时返回 UINT32_MAX。 */
+uint32_t MainLoopIdleMs(void);
 #ifdef __cplusplus
 }
 #endif
