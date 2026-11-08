@@ -21,6 +21,7 @@
 #include "HW_can.hpp"
 
 #include "can.h"
+#include "ins_chassis_gimbal_comm.hpp"
 #include "ins_motor.hpp"
 
 /* Private variables ---------------------------------------------------------*/
@@ -86,6 +87,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
        * 真正的「ID → 哪个电机」映射表在 Instance/component/ins_motor.cpp，
        * 这里只负责把帧原样交出去——通信原语不该知道总线上挂了哪些设备。 */
       MotorDispatchCanFrame(hcan, rx_header1.StdId, can1_rx_data);
+      BoardCommDispatch(hcan, rx_header1.StdId, can1_rx_data);
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
@@ -103,6 +105,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
                              can2_rx_data) == HAL_OK) {
       MotorDispatchCanFrame(hcan, rx_header2.StdId, can2_rx_data);
+      BoardCommDispatch(hcan, rx_header2.StdId, can2_rx_data);
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);

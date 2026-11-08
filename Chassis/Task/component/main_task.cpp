@@ -23,6 +23,7 @@
 #include "main_task.hpp"
 
 #include "comm_task.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
 #include "ins_motor.hpp"
 #include "tim.h"
 
@@ -36,7 +37,10 @@ void MainTaskInit(void) {
     (void)GetMotorSteer(i);
   }
 
-  /* 2) 通讯初始化：CAN 滤波器 + 启动外设 + 打开接收中断 */
+  /* 2) 双板通讯对象（构造时就绑定 0x101/0x102 与 CAN2） */
+  (void)GetGimbalChassisComm();
+
+  /* 3) 通讯初始化：CAN 滤波器 + 启动外设 + 打开接收中断 */
   CommTaskInit();
 
   /* TODO【第 3 项】: IMU 零漂采集（须在电机使能之后、状态机之前） */

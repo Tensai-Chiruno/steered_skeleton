@@ -21,6 +21,8 @@
 #include "main_task.hpp"
 
 #include "comm_task.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
+#include "ins_comm.hpp"
 #include "ins_motor.hpp"
 #include "tim.h"
 
@@ -31,7 +33,11 @@ void MainTaskInit(void) {
   (void)GetMotorYaw();
   (void)GetMotorPitch();
 
-  /* 2) 通讯初始化：CAN 滤波器 + 启动外设 + 接收中断 */
+  /* 2) 双板通讯对象 + 遥控器解码对象 */
+  (void)GetGimbalChassisComm();
+  (void)GetRemoteControl();
+
+  /* 3) 通讯初始化：CAN 滤波器/启动/中断 + DBUS 的 UART 空闲 DMA */
   CommTaskInit();
 
   /* TODO【第 3 项】: IMU 零漂采集 */

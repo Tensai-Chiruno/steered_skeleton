@@ -1,42 +1,54 @@
 /**
  *******************************************************************************
  * @file      :ins_chassis_gimbal_comm.cpp
- * @brief     :
+ * @brief     :本板双板通讯对象实现（Gimbal）
  * @history   :
  *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
+
 /* Includes ------------------------------------------------------------------*/
 #include "ins_chassis_gimbal_comm.hpp"
+
+#include "can.h"
 #include "gimbal_chassis_comm.hpp"
+#include "iwdg.h"
+#include "iwdg_policy.hpp"
+
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
-/* Private types -------------------------------------------------------------*/
-/* Private variables ---------------------------------------------------------*/
-/* External variables --------------------------------------------------------*/
-/* Private function prototypes -----------------------------------------------*/
+namespace {
+
+/* 云台板：发送 0x102（实际角反馈），接收 0x101（期望角） */
+constexpr uint32_t kC2gId = 0x101;
+constexpr uint32_t kG2cId = 0x102;
+
+/* 双板通讯固定在 CAN2：CAN1 留给电机。
+ * 这样「哪条总线出问题」可以直接从现象判断：电机不动看 CAN1，双板不同步看 CAN2。 */
+CAN_HandleTypeDef *const kBoardBus = &hcan2;
+
+robot::GimbalChassisComm g_comm(robot::GimbalChassisComm::CodePart::Gimbal, kG2cId, kC2gId);
+
+}  // namespace
+
 /* Exported function definitions ---------------------------------------------*/
-robot::GimbalChassisComm *GetGimbalChassisComm() {
-  /* TODO【新人任务】:
-   * 返回本板双板通讯对象单例。
-   *
-   * 你要做：
-   *   1. 静态定义一个 robot::GimbalChassisComm 对象，构造时传入：
-   *      - CodePart：本板是 Chassis 还是 Gimbal（决定编解码方向）。
-   *      - tx_id / rx_id：本板发送帧 / 接收帧的 CAN 标准帧 ID（两板协商一致）。
-   *   2. 返回其地址。
-   *
-   * 约束 / 提示：
-   *   - 类定义在 RobotComponents/component/gimbal_chassis_comm.hpp（encode/decode 由你实现）。
-   *   - CAN ID 建议从 0x200 之后的空闲标准帧 ID 里选，避开电机反馈 ID。
-   */
-  return nullptr;
+robot::GimbalChassisComm *GetGimbalChassisComm() { return &g_comm; }
+
+void BoardCommDispatch(CAN_HandleTypeDef *hcan, uint32_t std_id,
+                       const uint8_t data[8]) {
+  if (hcan != kBoardBus || std_id != g_comm.rx_id()) {
+    return;
+  }
+  g_comm.decode(data);
+
+#if !IWDG_UNCONDITIONAL
+  /* 第 10 项验收形态：对方帧到了才喂狗。对面停发 → 本板 204 ms 后复位。 */
+  HAL_IWDG_Refresh(&hiwdg);
+#endif
 }
 
 /* Private function definitions ----------------------------------------------*/

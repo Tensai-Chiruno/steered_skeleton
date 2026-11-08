@@ -138,6 +138,12 @@ message(STATUS "Project name: ${PROJECT_NAME}")
 # Add the project includes to the executable
 target_include_directories(${PROJECT_NAME} PUBLIC ${project_incs})
 
+# tick.cpp is implemented in two mutually exclusive preprocessor branches
+# (#if USE_UNIX_TICK / #elif USE_HAL_TICK, with no #else). Without either macro the
+# translation unit compiles to an object with no GetTickMs symbol at all, which only
+# shows up as an undefined reference once something calls it. Select the HAL branch.
+target_compile_definitions(${PROJECT_NAME} PUBLIC USE_HAL_TICK)
+
 # Link the drivers library and the third party libraries to the executable
 target_link_libraries(${PROJECT_NAME} PUBLIC drivers)
 target_link_libraries(${PROJECT_NAME} PUBLIC cmsis_dsp)

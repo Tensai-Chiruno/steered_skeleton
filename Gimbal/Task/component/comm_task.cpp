@@ -1,34 +1,36 @@
 /**
  *******************************************************************************
  * @file      :comm_task.cpp
- * @brief     :通讯层初始化与周期发送（考核第 1 / 2 项）
+ * @brief     :通讯层初始化与周期发送（云台板，含 DBUS）
  * @history   :
  *  Version     Date            Author          Note
- *  V1.0.0      2026-11-08      Tensai-Chiruno  1. CAN 滤波器 + 启动 + 电机帧发送
- *******************************************************************************
- * @attention :
- *  【云台板是 DBUS 的落点】
- *    遥控器接收机接在云台板 USART3（100k、9bit、偶校验、只收）。
- *    底盘板没有 DBUS，遥控数据由云台板经双板协议 0x102 下发（第 9 项）。
- *    所以第 2 项（UART 空闲+DMA）在这块板上做，底盘板只留接线位置。
- *
- *  【IWDG 现在是无条件喂的，这是临时措施】
- *    云台板 IWDG = Prescaler 128 / Reload 50，LSI 约 32 kHz，
- *    超时 = (50+1)*128/32000 ≈ 204 ms。不喂就会 204 ms 复位一次。
- *    第 10 项要求「关遥控器即杀程序」——那时要把本函数末尾这一行删掉，
- *    改成在遥控器解包处 / 下板信息解包处刷新（见考核说明 3.2）。
+ *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
  *******************************************************************************
  *  Copyright (c) 2024 Hello World Team, Zhejiang University.
  *  All Rights Reserved.
  *******************************************************************************
  */
+
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
 
 #include "HW_can.hpp"
 #include "can.h"
+#include "gimbal_chassis_comm.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
+#include "ins_comm.hpp"
 #include "ins_motor.hpp"
+#include "usart.h"
 #include "iwdg.h"
+#include "iwdg_policy.hpp"
+
+/* Private variables ---------------------------------------------------------*/
+namespace {
+/* DBUS 一帧固定 18 字节。缓冲区必须是静态的：DMA 直写内存，
+ * 放栈上函数一返回就被覆盖。 */
+constexpr uint16_t kDbusFrameLen = 18u;  ///< DBUS 固定 18 字节
+uint8_t g_dbus_buf[kDbusFrameLen];
+}  // namespace
 
 /* Exported function definitions ---------------------------------------------*/
 void CommTaskInit(void) {
@@ -44,23 +46,55 @@ void CommTaskInit(void) {
   HAL_CAN_Start(&hcan2);
   HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
 
-  /* TODO【第 2 项】: 启动 DBUS 接收（本板 USART3）
-   *   HAL_UARTEx_ReceiveToIdle_DMA(&huart3, dbus_buf_, 18);
-   *   需先 MX_DMA_Init 已由 main.c 调用；回调见文件末尾 TODO。 */
+  /* 3) DBUS：USART3 已由 CubeMX 配成 100k / 9bit / 偶校验 / 仅接收，
+   *    且 DMA1_Stream1 是【循环模式】（见 usart.c），所以只需要启动一次，
+   *    不需要每帧重启接收。
+   *    关掉半传输中断：DBUS 每 14 ms 才来一帧，半满中断只会制造无谓负载。 */
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
 }
 
 void CommTask(void) {
-  /* 1) yaw / pitch 指令打包发出（DM 电机的使能指令也由 encode 自动插入） */
+  /* 1) yaw / pitch 指令打包发出（CAN1；DM 使能指令由 encode 自动插入） */
   MotorSendAllCommands();
 
-  /* 2) TODO【第 9 项】: 双板通讯对象 encode 后发送 0x102 */
+  /* 2) 双板帧：把本板状态编码后发到 CAN2 */
+  robot::GimbalChassisComm *bc = GetGimbalChassisComm();
+  bc->local().online = 1;
+  bc->local().ready = 0;
+  uint8_t buf[8];
+  bc->encode(buf);
+  CAN_Send_Msg(&hcan2, buf, bc->tx_id(), 8);
 
-  /* 3) 喂狗（临时，见文件头说明） */
+#if IWDG_UNCONDITIONAL
+  /* 台架保活。验收时把 iwdg_policy.hpp 改成 0，
+   * 喂狗改由 DBUS 解包回调完成（关遥控器即杀程序）。 */
   HAL_IWDG_Refresh(&hiwdg);
+#endif
 }
 
 /* Private function definitions ----------------------------------------------*/
-/* TODO【第 2 项】: 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback
- *   - 收到 18 字节后调用 GetRemoteControl()->decode(buf)，并重启下一轮接收；
- *   - 该回调是 C 链接，需 extern "C" 包裹。
+
+/**
+ * @brief UART 空闲/DMA 接收完成回调
+ * @note  必须 extern "C"：HAL 的弱符号是 C 链接，不加就覆盖不到它，
+ *        现象是「UART 收到了但回调从不进」。
  */
+extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
+                                           uint16_t Size) {
+  if (huart != &huart3) {
+    return;
+  }
+  if (Size >= kDbusFrameLen) {
+    GetRemoteControl()->decode(g_dbus_buf);
+
+#if !IWDG_UNCONDITIONAL
+    /* 第 10 项验收形态：收到遥控器数据才喂狗 */
+    HAL_IWDG_Refresh(&hiwdg);
+#endif
+  }
+  /* 循环 DMA 下不需要重启；只有出错导致 RxState 掉出 BUSY 时才补一次 */
+  if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  }
+}
