@@ -43,6 +43,8 @@ uint32_t RemoteIdleMs(void) {
   return hello_world::tick::GetTickMs() - g_last_rx_ms;
 }
 
+void InvalidateRemote(void) { g_has_frame = false; }
+
 bool IsRemoteOnline(void) {
   return g_has_frame && (RemoteIdleMs() < kRemoteTimeoutMs);
 }

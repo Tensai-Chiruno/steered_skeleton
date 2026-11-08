@@ -31,4 +31,10 @@ uint32_t RemoteIdleMs(void);
 /** @brief  遥控器是否在线：收到过帧且空闲时间小于阈值。 */
 bool IsRemoteOnline(void);
 
+/**
+ * @brief  主动作废"在线"状态（用于连续可疑帧：按离线走现成的急停路径）。
+ * @note   不是新状态，只是把 has_frame 清掉；下一帧合法数据会自动恢复。
+ */
+void InvalidateRemote(void);
+
 #endif /* INSTANCE_COMPONENT_INS_COMM_STATE_HPP_ */

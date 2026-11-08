@@ -120,6 +120,12 @@ void Robot::updateRemote(void) {
     delta = comm_->remote().yaw;
     delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
   }
+  /* 现场翻号，不用改代码、不用重烧：把**拨轮**压到最左（全工程只有它在写、无消费者），
+   * δ 取反。两个拨杆都被占满了（左=急停白名单，右=模式 Up/Mid/Down），所以用拨轮。
+   * 符号本身要靠实车判定：车头上电、云台指车身左侧、推前进 → 应向左横移。 */
+  if (rc_ != nullptr && rc_->rc_wheel() < -0.7f) {
+    delta = -delta;
+  }
   yaw_error_ = delta;                       /* 跟随模式用 */
   if (chassis_ != nullptr) {
     chassis_->setFrameDelta(delta);          /* 前进方向变换用 */

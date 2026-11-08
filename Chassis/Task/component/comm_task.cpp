@@ -17,6 +17,7 @@
 #include "ins_comm_state.hpp"
 
 #include "HW_can.hpp"
+#include "rc_frame_gate.hpp"
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
@@ -30,6 +31,10 @@
 namespace {
 constexpr uint16_t kDbusFrameLen = 18u;  ///< DBUS 固定 18 字节
 uint8_t g_dbus_buf[kDbusFrameLen];
+/* 先解到临时对象，跳变检查通过才采用 —— 这样"保持上一帧"是天然的：
+ * 不通过时 GetRemoteControl() 里的 rc_*_ 一个字节都没被改过。 */
+hello_world::remote_control::DT7 g_rc_scratch;
+hello_world::comm::RcFrameGate g_rc_gate;
 }  // namespace
 
 /* Exported function definitions ---------------------------------------------*/
@@ -90,8 +95,21 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
     return;
   }
   if (Size >= kDbusFrameLen) {
-    GetRemoteControl()->decode(g_dbus_buf);
-    NotifyRemoteFrame();
+    /* DBUS 没有固定帧头，掉 1 字节后长度仍是 18，`Size >= 18` 判不出来。
+     * 用"摇杆单帧跳变"当错帧判据：143 Hz 下真摇杆不可能一帧跳 >0.45。
+     * 不可信时保持上一帧值（不清零），连续 3 帧按离线走现成急停。 */
+    g_rc_scratch.decode(g_dbus_buf);
+    hello_world::comm::RcSticks now;
+    now.lv = g_rc_scratch.rc_lv();
+    now.lh = g_rc_scratch.rc_lh();
+    now.rv = g_rc_scratch.rc_rv();
+    now.rh = g_rc_scratch.rc_rh();
+    if (g_rc_gate.accept(now)) {
+      *GetRemoteControl() = g_rc_scratch;
+      NotifyRemoteFrame();
+    } else if (g_rc_gate.shouldDropOnline()) {
+      InvalidateRemote();   /* 连续可疑：立即判离线，车停住 */
+    }
   }
   if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
     HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));

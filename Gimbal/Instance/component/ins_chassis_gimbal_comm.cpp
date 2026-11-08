@@ -25,8 +25,12 @@ namespace {
 constexpr uint32_t kC2gId = 0x210;  // 考核说明 3.4 建议值
 constexpr uint32_t kG2cId = 0x211;  // 必须避开 0x200/0x201~0x208/0x01~0x1F
 
-/* 双板通讯固定在 CAN2：CAN2 是主干（电机 + 双板帧共用），CAN1 本板未使用。
- * 这样「哪条总线出问题」可以直接从现象判断：电机不动看 CAN2，双板不同步看 CAN2。 */
+/* 双板通讯固定在 CAN2：CAN2 是主干（yaw/pitch 电机帧 + 双板帧共用）。
+ * 判据：电机不动 = 查 CAN2 上的电机帧；双板不同步 = 查 CAN2 上的双板帧。
+ *   两者都在同一根线上，所以 CAN2 出错时两种现象会同时出现，别当成两个独立故障。
+ * CAN1 本板未使用：它虽然被配了全收滤波 + HAL_CAN_Start + FIFO0 通知，
+ *   但 BoardCommDispatch / MotorDispatchCanFrame 对 hcan1 一律直接 return，
+ *   所以**误接到 CAN1 的任何设备表现为"完全没反应、也不报错"**，不要到 CAN1 上找问题。 */
 CAN_HandleTypeDef *const kBoardBus = &hcan2;
 
 robot::GimbalChassisComm g_comm(robot::GimbalChassisComm::CodePart::Gimbal, kG2cId, kC2gId);
