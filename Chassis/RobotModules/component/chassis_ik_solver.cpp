@@ -59,6 +59,21 @@ float ChassisIkSolver::wrapPi(float angle) {
   return a - kPi;
 }
 
+void ChassisIkSolver::gimbalToChassis(float vx_g, float vy_g, float delta,
+                                      float *vx_c, float *vy_c) {
+  if (vx_c == nullptr || vy_c == nullptr) {
+    return;
+  }
+  const float c = std::cos(delta);
+  const float s = std::sin(delta);
+  /* vx_c =  vx_g·cosδ + vy_g·sinδ
+   * vy_c = -vx_g·sinδ + vy_g·cosδ
+   * 这是把「表达在云台系里」的速度矢量转到「表达在车体系里」的旋转矩阵
+   * （绕 z 轴旋转 −δ）。符号以实车为准，但结构必须是这个。 */
+  *vx_c = vx_g * c + vy_g * s;
+  *vy_c = -vx_g * s + vy_g * c;
+}
+
 void ChassisIkSolver::init(const Params &params) {
   params_ = params;
   reset();
@@ -103,6 +118,19 @@ void ChassisIkSolver::solve(float vx, float vy, float w,
     } else if (diff < -kHalfPi) {
       angle = wrapPi(angle + kPi);
       speed = -speed;
+    }
+
+    /* 舵角变化率限幅（考核说明 3.3）：按 1 ms 周期把 rad/s 换算成单拍步长。
+     * 限速后舵角不再等于理想解，但舵机不会被要求瞬间甩大角度；
+     * 下一拍会继续逼近，几拍内即到位。 */
+    if (params_.max_steer_rate > 0.0f) {
+      const float max_step = params_.max_steer_rate * 1.0e-3f;
+      const float d2 = wrapPi(angle - wheel_[i].angle);
+      if (d2 > max_step) {
+        angle = wheel_[i].angle + max_step;
+      } else if (d2 < -max_step) {
+        angle = wheel_[i].angle - max_step;
+      }
     }
 
     wheel_[i].angle = wrapPi(angle);

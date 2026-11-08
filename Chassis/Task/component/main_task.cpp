@@ -24,6 +24,7 @@
 
 #include "comm_task.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
+#include "ins_comm.hpp"
 #include "ins_motor.hpp"
 #include "tim.h"
 
@@ -39,6 +40,7 @@ void MainTaskInit(void) {
 
   /* 2) 双板通讯对象（构造时就绑定 0x101/0x102 与 CAN2） */
   (void)GetGimbalChassisComm();
+  (void)GetRemoteControl();  // 两板都收 DBUS
 
   /* 3) 通讯初始化：CAN 滤波器 + 启动外设 + 打开接收中断 */
   CommTaskInit();

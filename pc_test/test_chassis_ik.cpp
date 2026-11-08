@@ -267,6 +267,83 @@ void TestSpeedLimitScalesUniformly(void) {
   Check(max_speed <= 5.0f + 1.0e-3f, "limit respected", "");
 }
 
+
+/** 7. 云台系 → 车体系 旋转（考核说明 3.2） */
+void TestGimbalToChassis(void) {
+  std::printf("\n[7] gimbal frame -> chassis frame rotation\n");
+  float vx = 0.0f, vy = 0.0f;
+
+  /* δ=0：云台与车头同向，恒等 */
+  ChassisIkSolver::gimbalToChassis(1.0f, 0.0f, 0.0f, &vx, &vy);
+  Check(Near(vx, 1.0f) && Near(vy, 0.0f), "delta=0 is identity", "");
+
+  /* δ=+90°：按考核说明 3.2 给的公式逐字实现
+   *   vx_c =  vx_g·cosδ + vy_g·sinδ
+   *   vy_c = -vx_g·sinδ + vy_g·cosδ
+   * 代入 (1,0)、δ=π/2 得 (0,-1)。这就是那个公式的结果，不是物理推断。
+   *
+   * ⚠ δ 的符号约定（云台朝向左为正？还是右为正？）文档自己写「符号以实车
+   *   调试为准」。如果实车上「推杆往前、车往反方向走」，**不要改这个函数**，
+   *   要改 δ 的计算来源（3.2 提到可由云台 yaw 关节角 + 底盘 IMU yaw 组合，
+   *   也可由两板 IMU 绝对 yaw 相减），那是符号的来源。 */
+  ChassisIkSolver::gimbalToChassis(1.0f, 0.0f, kPi / 2.0f, &vx, &vy);
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "got (%.3f, %.3f) expect (0,-1) per spec formula",
+                static_cast<double>(vx), static_cast<double>(vy));
+  Check(Near(vx, 0.0f) && Near(vy, -1.0f), "matches spec formula at delta=+90", buf);
+
+  /* 模长必须守恒（纯旋转） */
+  bool norm_ok = true;
+  for (int deg = 0; deg < 360; deg += 15) {
+    const float d = static_cast<float>(deg) / 180.0f * kPi;
+    ChassisIkSolver::gimbalToChassis(0.6f, -0.8f, d, &vx, &vy);
+    const float n = std::sqrt(vx * vx + vy * vy);
+    if (std::fabs(n - 1.0f) > 1.0e-3f) norm_ok = false;
+  }
+  Check(norm_ok, "rotation preserves magnitude", "");
+
+  /* 转回去应当还原（−δ） */
+  ChassisIkSolver::gimbalToChassis(0.6f, -0.8f, 1.234f, &vx, &vy);
+  float bx = 0.0f, by = 0.0f;
+  ChassisIkSolver::gimbalToChassis(vx, vy, -1.234f, &bx, &by);
+  Check(Near(bx, 0.6f) && Near(by, -0.8f), "inverse rotation restores", "");
+}
+
+/** 8. 舵角变化率限幅（考核说明 3.3） */
+void TestSteerRateLimit(void) {
+  std::printf("\n[8] steer rate limit caps the per-tick step\n");
+
+  ChassisIkSolver s;
+  ChassisIkSolver::Params p;
+  p.wheel_radius = 0.066f;
+  p.half_wheelbase = 0.167f;
+  p.half_track = 0.167f;
+  p.max_steer_rate = 3.0f;  // rad/s -> 1ms 单拍最多 0.003 rad
+  s.init(p);
+
+  ChassisIkSolver::WheelState w[4];
+  s.solve(1.0f, 0.0f, 0.0f, w);            // 先朝前
+  const float a0 = w[0].angle;
+
+  s.solve(0.0f, 1.0f, 0.0f, w);            // 立刻要求 90°
+  const float step1 = std::fabs(ChassisIkSolver::wrapPi(w[0].angle - a0));
+  std::printf("      first tick after +90 request: step = %.4f rad (limit %.4f)\n",
+              static_cast<double>(step1), 0.003);
+
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "step=%.4f rad", static_cast<double>(step1));
+  Check(step1 <= 0.003f + 1.0e-6f, "per-tick step capped", buf);
+
+  /* 连续跑足够多拍后必须真的到位（限速只限制过渡，不改变终值） */
+  float last = w[0].angle;
+  for (int i = 0; i < 3000; ++i) {
+    s.solve(0.0f, 1.0f, 0.0f, w);
+    last = w[0].angle;
+  }
+  std::snprintf(buf, sizeof(buf), "converged to %.1f deg", static_cast<double>(last * kDeg));
+  Check(Near(last, kPi / 2.0f, 1.0e-2f), "eventually reaches target", buf);
+}
+
 }  // namespace
 
 int main(void) {
@@ -281,6 +358,8 @@ int main(void) {
   TestNoWhipAtPi();
   TestZeroKeepsAngle();
   TestSpeedLimitScalesUniformly();
+  TestGimbalToChassis();
+  TestSteerRateLimit();
 
   std::printf("\n--------------------------------------------------\n");
   std::printf(" SUMMARY: %d passed, %d failed\n", g_pass, g_fail);

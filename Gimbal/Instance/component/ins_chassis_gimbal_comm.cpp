@@ -16,8 +16,6 @@
 
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"
-#include "iwdg.h"
-#include "iwdg_policy.hpp"
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -45,10 +43,6 @@ void BoardCommDispatch(CAN_HandleTypeDef *hcan, uint32_t std_id,
   }
   g_comm.decode(data);
 
-#if !IWDG_UNCONDITIONAL
-  /* 第 10 项验收形态：对方帧到了才喂狗。对面停发 → 本板 204 ms 后复位。 */
-  HAL_IWDG_Refresh(&hiwdg);
-#endif
 }
 
 /* Private function definitions ----------------------------------------------*/

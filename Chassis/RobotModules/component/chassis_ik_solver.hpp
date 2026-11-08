@@ -63,6 +63,12 @@ class ChassisIkSolver {
 
     /** 低于此轮心线速度（m/s）视为静止：保持舵角不动，轮速给 0。 */
     float min_linear_speed = 1.0e-4f;
+
+    /** 舵角变化率上限，rad/s。<= 0 表示不限。
+     *  考核说明 3.3 明确要求「轮速、舵角变化率均需限幅」，否则急打方向时
+     *  舵机会带着整只轮子猛甩，既伤电机也让车瞬间失稳。
+     *  solve() 按 1 ms 周期换算成单拍最大步长。 */
+    float max_steer_rate = 0.0f;
   };
 
   /** 单轮指令 */
@@ -96,8 +102,26 @@ class ChassisIkSolver {
   static constexpr float kHalfPi = 1.57079632679489661923f;
 
   /** 把任意角度回绕到 [-π, π)。用 fmod 而非循环加减：1 ms 硬实时里循环次数
-   *  不确定是不可接受的（多圈累计时可能要循环几十次）。 */
+   *  不确定是不可接受的（多圈累计时要循环几十次）。 */
   static float wrapPi(float angle);
+
+  /**
+   * @brief  云台坐标系 → 车体坐标系 的平移速度旋转（考核说明 3.2，硬性约定）
+   * @param  vx_g / vy_g 云台系速度（x = 云台朝向、y = 云台左方），m/s
+   * @param  delta       云台朝向 − 车头朝向（rad），调用前须归一化到 [-π, π)
+   * @param  vx_c / vy_c 输出的车体系速度
+   * @retval None
+   * @note   考核明确要求「前进正方向始终是云台朝向」：操作手往前推杆，无论车头
+   *         朝哪、车是否在小陀螺自旋，车都应朝云台指向前进。所以逆解之前必须
+   *         先做这一层旋转；直接把遥控器值喂给逆解，车头一转行为就变了。
+   *
+   * @note   实现严格等于考核说明 3.2 给的公式（可逐字对照）。
+   *         ⚠ δ 的**符号方向**文档注明「以实车调试为准」：若上板后发现推杆方向
+   *         相反，要改的是 δ 的来源（云台 yaw 关节角与底盘 IMU yaw 的组合符号），
+   *         而不是这个函数内部的矩阵。
+   */
+  static void gimbalToChassis(float vx_g, float vy_g, float delta, float *vx_c,
+                              float *vy_c);
 
  private:
   Params params_{};

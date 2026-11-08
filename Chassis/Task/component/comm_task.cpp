@@ -18,9 +18,17 @@
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
+#include "ins_comm.hpp"
 #include "ins_motor.hpp"
+#include "usart.h"
 #include "iwdg.h"
 #include "iwdg_policy.hpp"
+
+/* Private variables ---------------------------------------------------------*/
+namespace {
+constexpr uint16_t kDbusFrameLen = 18u;  ///< DBUS 固定 18 字节
+uint8_t g_dbus_buf[kDbusFrameLen];
+}  // namespace
 
 /* Exported function definitions ---------------------------------------------*/
 void CommTaskInit(void) {
@@ -36,7 +44,11 @@ void CommTaskInit(void) {
   HAL_CAN_Start(&hcan2);
   HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
 
-  /* 底盘板不接 DBUS：遥控数据由云台板经 0x102 下发。DBUS 接收在云台板实现。 */
+  /* 3) DBUS：考核说明任务 2 明确「两板」都要做。两板的 USART3 都是
+   *    100k / 9bit / 偶校验 / 仅接收，DMA1_Stream1 循环模式，所以启动一次即可。
+   *    关掉半传输中断：DBUS 每 14 ms 才来一帧，半满中断只增加负载。 */
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
 }
 
 void CommTask(void) {
@@ -51,11 +63,28 @@ void CommTask(void) {
   bc->encode(buf);
   CAN_Send_Msg(&hcan2, buf, bc->tx_id(), 8);
 
-#if IWDG_UNCONDITIONAL
-  /* 台架保活。验收时把 iwdg_policy.hpp 改成 0，
-   * 喂狗改由 BoardCommDispatch() 在收到云台帧时完成。 */
+#if IWDG_FEED_IN_COMM_TASK
+  /* 正常形态：CommTask 每 1ms 刷新。验收演示复位时把
+   * iwdg_policy.hpp 的 IWDG_FEED_IN_COMM_TASK 改成 0。 */
   HAL_IWDG_Refresh(&hiwdg);
 #endif
 }
 
 /* Private function definitions ----------------------------------------------*/
+
+/**
+ * @brief UART 空闲/DMA 接收完成回调（底盘板）
+ * @note  必须 extern "C"，否则覆盖不到 HAL 的弱符号，现象是「收到了但回调不进」。
+ */
+extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
+                                           uint16_t Size) {
+  if (huart != &huart3) {
+    return;
+  }
+  if (Size >= kDbusFrameLen) {
+    GetRemoteControl()->decode(g_dbus_buf);
+  }
+  if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  }
+}

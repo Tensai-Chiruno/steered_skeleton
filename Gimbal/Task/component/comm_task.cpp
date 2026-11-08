@@ -66,9 +66,9 @@ void CommTask(void) {
   bc->encode(buf);
   CAN_Send_Msg(&hcan2, buf, bc->tx_id(), 8);
 
-#if IWDG_UNCONDITIONAL
-  /* 台架保活。验收时把 iwdg_policy.hpp 改成 0，
-   * 喂狗改由 DBUS 解包回调完成（关遥控器即杀程序）。 */
+#if IWDG_FEED_IN_COMM_TASK
+  /* 正常形态：CommTask 每 1ms 刷新。验收演示复位时把
+   * iwdg_policy.hpp 的 IWDG_FEED_IN_COMM_TASK 改成 0。 */
   HAL_IWDG_Refresh(&hiwdg);
 #endif
 }
@@ -88,10 +88,7 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
   if (Size >= kDbusFrameLen) {
     GetRemoteControl()->decode(g_dbus_buf);
 
-#if !IWDG_UNCONDITIONAL
-    /* 第 10 项验收形态：收到遥控器数据才喂狗 */
-    HAL_IWDG_Refresh(&hiwdg);
-#endif
+/* 新文档的验收方式是「临时屏蔽 CommTask 里的喂狗」，此处不再按数据源喂狗 */
   }
   /* 循环 DMA 下不需要重启；只有出错导致 RxState 掉出 BUSY 时才补一次 */
   if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {
