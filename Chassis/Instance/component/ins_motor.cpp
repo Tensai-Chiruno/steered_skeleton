@@ -56,11 +56,16 @@ constexpr hello_world::motor::Dir kWheelDir[kWheelNum] = {
     hello_world::motor::kDirFwd, hello_world::motor::kDirFwd,
     hello_world::motor::kDirFwd, hello_world::motor::kDirFwd};
 
-/* 舵电机：id 1~4，保留内置减速器（ex_redu_rat = 1），方向全部反向 */
+/* 舵电机：id 1~4，保留内置减速器（ex_redu_rat = 1），方向全部反向。
+ * 舵向零点偏移来自考核说明 6.2「已按实机配置统一补齐」的固定值，必须照抄：
+ *   缺了它，舵角反馈就不是车体坐标系下的舵角，逆解算出来的目标角会整体偏掉，
+ *   现象是「四轮都在转但车身斜着走」。 */
 constexpr uint8_t kSteerId[kSteerNum] = {1, 2, 3, 4};
 constexpr hello_world::motor::Dir kSteerDir[kSteerNum] = {
     hello_world::motor::kDirRev, hello_world::motor::kDirRev,
     hello_world::motor::kDirRev, hello_world::motor::kDirRev};
+constexpr float kSteerOffset[kSteerNum] = {2.61346f, -2.06844f, 0.00729f,
+                                           1.58518f};  // LF / LB / RB / RF
 
 }  // namespace
 
@@ -105,8 +110,8 @@ void EnsureInit(void) {
   HW_ASSERT(hello_world::motor::M3508::GetTxId(1) == 0x200, "wheel tx id");
   HW_ASSERT(hello_world::motor::M3508::GetRxId(1) == 0x201, "wheel rx id");
   HW_ASSERT(hello_world::motor::GM6020::GetTxId(
-                kSteerId[0], hello_world::motor::InputType::kCurr) == 0x1FE,
-            "steer tx id (kCurr -> 0x1FE, not 0x1FF)");
+                kSteerId[0], hello_world::motor::InputType::kRaw) == 0x1FF,
+            "steer tx id (kRaw -> 0x1FF)");
   HW_ASSERT(hello_world::motor::GM6020::GetRxId(1) == 0x205, "steer rx id");
 
   inited_ = true;
@@ -188,18 +193,14 @@ void MotorSendAllCommands(void) {
   for (int i = 0; i < kSteerNum; ++i) {
     steer_[i].encode(buf);
   }
-  /* 注意这里算出来的 ID 是 0x1FE 而不是 0x1FF，不是笔误：
-   *   GM6020 用「帧 ID」区分这个 int16 是电压还是电流 ——
-   *     0x1FF = kRawTx1_4_  （电压域，-30000~30000 映射 ±24 V）
-   *     0x1FE = kCurrTx1_4_ （电流域，-16384~16384 映射 ±3 A）
-   *   本车舵电机按考核说明用「电流 kCurr」输入，所以必须发 0x1FE；
-   *   若发到 0x1FF，同一个整数会被电机当成电压解释，量纲差一截，
-   *   现象是「指令给得很小电机却猛地转」。
-   *   考核说明的表里写「输入 kCurr / 控制 ID 0x1FF」，这两句自相矛盾，
-   *   实现以设备类的 GetTxId(id, input_type) 为准（它是耦合的，不会错配）。 */
+  /* GM6020 用「帧 ID」区分这个 int16 是电压还是电流：
+   *   0x1FF = kRawTx1_4_（电压域）、0x1FE = kCurrTx1_4_（电流域）。
+   * 本车按考核说明 2.3 用默认的电压控制 kRaw，所以走 0x1FF。
+   * 若将来在上位机打开电流环，必须同时把 input_type 改成 kCurr，
+   * 只改帧 ID 不改量纲会让指令被差一个比例。 */
   CAN_Send_Msg(kSteerBus, buf,
                hello_world::motor::GM6020::GetTxId(
-                   kSteerId[0], hello_world::motor::InputType::kCurr),
+                   kSteerId[0], hello_world::motor::InputType::kRaw),
                8);
 }
 

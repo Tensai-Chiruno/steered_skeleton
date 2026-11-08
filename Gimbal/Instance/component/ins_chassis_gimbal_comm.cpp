@@ -24,8 +24,8 @@
 namespace {
 
 /* 云台板：发送 0x102（实际角反馈），接收 0x101（期望角） */
-constexpr uint32_t kC2gId = 0x101;
-constexpr uint32_t kG2cId = 0x102;
+constexpr uint32_t kC2gId = 0x210;  // 考核说明 3.4 建议值
+constexpr uint32_t kG2cId = 0x211;  // 必须避开 0x200/0x201~0x208/0x01~0x1F
 
 /* 双板通讯固定在 CAN2：CAN1 留给电机。
  * 这样「哪条总线出问题」可以直接从现象判断：电机不动看 CAN1，双板不同步看 CAN2。 */

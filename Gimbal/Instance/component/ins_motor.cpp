@@ -40,6 +40,12 @@ namespace {
 constexpr uint8_t kYawId = 1;    ///< yaw 关节 DM-J4310 的 CAN id
 constexpr uint8_t kPitchId = 2;  ///< pitch 关节 DM-J4310 的 CAN id
 
+/* 云台两轴的零点偏移与方向，取自考核说明 6.2（已按实机补齐的固定值）。
+ * 注意两轴方向不同：yaw 正向、pitch 反向。写反了的表现是
+ * 「摇杆往右云台往左」，而闭环本身还是收敛的，所以很容易被误判成摇杆映射问题。 */
+constexpr float kYawOffset = 1.60879f;
+constexpr float kPitchOffset = 2.91772f;
+
 /** yaw / pitch 所在总线。按实车拓扑图：CAN2 是主干总线，
  *  Yaw(0x01) 与 Pitch(0x02) 都挂 CAN2，与双板通讯同一条总线。
  *  两者 ID 段不冲突（电机反馈 0x11/0x12，双板 0x101/0x102）。 */
@@ -68,15 +74,17 @@ void EnsureInit(void) {
   opt_yaw.ex_redu_rat = 1.0f;
   opt_yaw.remove_build_in_reducer = false;
   opt_yaw.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
+  opt_yaw.angle_offset = kYawOffset;
   yaw_.init(kYawId, opt_yaw, true, false);
 
   /* pitch：只用关节角的一小段，限位由上层用反馈角度做，不在这里卡死 */
   hello_world::motor::OptionalParams opt_pitch;
   opt_pitch.input_type = hello_world::motor::InputType::kTorq;
-  opt_pitch.dir = hello_world::motor::kDirFwd;
+  opt_pitch.dir = hello_world::motor::kDirRev;  // 考核说明 6.2：pitch 反向
   opt_pitch.ex_redu_rat = 1.0f;
   opt_pitch.remove_build_in_reducer = false;
   opt_pitch.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
+  opt_pitch.angle_offset = kPitchOffset;
   pitch_.init(kPitchId, opt_pitch, true, false);
 
   /* 把期望的 CAN ID 钉死：DM 的反馈恒为 id + 0x10，控制恒为 id。
