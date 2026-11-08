@@ -97,11 +97,27 @@ void Robot::updateRemote(void) {
   /* IMU 就绪（P1-2）：未注册、标定未完成、SPI 读失败都不许进 Working。 */
   imu_ready_ = (imu_ != nullptr) && imu_->isReady() && imu_->isOk();
 
-  /* 第 6 项：δ = 云台绝对 yaw − 车头 yaw，两边都是实测角。
-   * 对端离线时不可信，保持 0（此时也已经急停，车不会动）。 */
+  /* 第 6 项：δ = 云台相对**车体**的夹角。
+   *
+   * ★ 参考系（P0-5，别改回去）：
+   *   - 云台板发布的 `remote().yaw` 是 gimbal_->current().yaw，
+   *     即「云台相对车体」的编码器角（DM 编码器 + kYawOffset 标定），
+   *     天生与车体朝向无关 —— 这正是 gimbalToChassis() 需要的 δ。
+   *   - 本板 `imu_->yaw()` 是「车体相对**本板上电瞬间**」的积分量，
+   *     而 BMI088 无磁参考、只靠加速度计+陀螺，yaw 会自由漂移。
+   *   两者不能相减：相减等于往 δ 里混进一个不属于同一参考系的 ψ，
+   *   表现为「车体转过多少，前进方向就偏多少，而且方向相反」；
+   *   更糟的是车体不动时 ψ≈0，台架静态测试完全正常，查不出来。
+   *   而且 IWDG 复位是自动发生、车不会停的 —— 只要有一块板复位过，
+   *   或两块板不是同时上电，δ 就凭空多/少一个未知常数，车往没预料的方向跑且不报错。
+   *
+   *   若将来确实想用 IMU，必须让两个 yaw 共享同一零点
+   *   （底盘把自己的 yaw 发给云台、由云台算相对角），
+   *   绝不能拿两块板各自的开机零点相减。
+   * 对端离线时 δ 不可信，保持 0（此时也已急停，车不会动）。 */
   float delta = 0.0f;
-  if (!peer_offline_ && comm_ != nullptr && imu_ != nullptr) {
-    delta = comm_->remote().yaw - imu_->yaw();
+  if (!peer_offline_ && comm_ != nullptr) {
+    delta = comm_->remote().yaw;
     delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
   }
   yaw_error_ = delta;                       /* 跟随模式用 */

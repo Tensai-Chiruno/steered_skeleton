@@ -93,7 +93,7 @@ void Chassis::update(void) {
    *    δ 由 Robot 每拍下发；δ == 0 时是恒等变换，单板台架无需对端也能跑。 */
   float vx_c = t.vx;
   float vy_c = t.vy;
-  if (frame_delta_ != 0.0f) {
+  if (params_.rotate_velocity_by_delta && frame_delta_ != 0.0f) {
     hello_world::chassis_ik_solver::ChassisIkSolver::gimbalToChassis(
         t.vx, t.vy, frame_delta_, &vx_c, &vy_c);
   }

@@ -91,6 +91,7 @@ void Imu::update(void) {
       /* 标定期间照常跑姿态解算，保证姿态先收敛 */
       ahrs_.update(acc_, gyro_);
       ahrs_.getEulerAngle(euler_);
+  raw_yaw_ = euler_[2];  /* 记住原始 yaw：euler_[2] 随后会被改写成「已扣零点」的值 */
       return;
     }
     if (calib_count_ >= need && need > 0) {
@@ -99,7 +100,9 @@ void Imu::update(void) {
         gyro_bias_[i] = bias_sum_[i] / n;
       }
       ahrs_.getEulerAngle(euler_);
+  raw_yaw_ = euler_[2];  /* 记住原始 yaw：euler_[2] 随后会被改写成「已扣零点」的值 */
       yaw_offset_ = euler_[2];  /* 开机位置即 yaw 零点 */
+      euler_[2] = 0.0f;        /* 立刻让 yaw() 读到 0，别把原始值漏出去一拍 */
       ready_ = true;
       return;
     }
@@ -117,7 +120,9 @@ void Imu::update(void) {
         }
       }
       ahrs_.getEulerAngle(euler_);
+  raw_yaw_ = euler_[2];  /* 记住原始 yaw：euler_[2] 随后会被改写成「已扣零点」的值 */
       yaw_offset_ = euler_[2];
+      euler_[2] = 0.0f;
       calib_timeout_ = true;
       ready_ = true;
       return;
@@ -125,21 +130,27 @@ void Imu::update(void) {
     /* 静置条件不满足：这一拍不累加，继续等（不会误标定） */
     ahrs_.update(acc_, gyro_);
     ahrs_.getEulerAngle(euler_);
+  raw_yaw_ = euler_[2];  /* 记住原始 yaw：euler_[2] 随后会被改写成「已扣零点」的值 */
     return;
   }
 
   ahrs_.update(acc_, gyro_);
   ahrs_.getEulerAngle(euler_);
+  raw_yaw_ = euler_[2];  /* 记住原始 yaw：euler_[2] 随后会被改写成「已扣零点」的值 */
 
   /* yaw 归一化到 (-pi, pi] 并扣掉开机零点 */
-  float yaw = euler_[2] - yaw_offset_;
+  float yaw = raw_yaw_ - yaw_offset_;
   while (yaw > 3.14159265f) yaw -= 6.28318531f;
   while (yaw < -3.14159265f) yaw += 6.28318531f;
   euler_[2] = yaw;
 }
 
 void Imu::resetYaw(void) {
-  yaw_offset_ += euler_[2];
+  /* 语义：把**当前姿态**记为新的 yaw 零点，使 yaw() 立刻等于 0。
+   * 旧写法 `yaw_offset_ += euler_[2]` 在 euler_[2] 还是「已扣过零点」的值时
+   * 会得到一个与当前姿态无关的冻结常数（标定未完成时尤其明显）。
+   * 这里统一用未经修正的 raw_yaw_，两种时机下都正确。 */
+  yaw_offset_ = raw_yaw_;
   euler_[2] = 0.0f;
 }
 

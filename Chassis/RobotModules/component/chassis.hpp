@@ -45,6 +45,11 @@ class Chassis {
     float steer_raw_limit = 20000.0f; ///< 舵电机 raw 限幅（GM6020 帧满量程 25000）
     float wheel_raw_limit = 16000.0f; ///< 轮电机 raw 限幅（M3508 帧满量程 16384）
     float steer_deadband = 0.01f;     ///< 舵角误差死区，rad
+    /** 是否按 δ 把遥控的 (vx, vy) 从云台系旋到车体系。
+     *  考核 3.2「前进正方向始终是云台朝向」→ true（默认）。
+     *  若分离模式（kDepart）本意是「前进方向沿车头」，把它改成 false 即可，
+     *  这是一项现场待确认项，不要两边都改。 */
+    bool rotate_velocity_by_delta = true;
   };
 
   void init(void);

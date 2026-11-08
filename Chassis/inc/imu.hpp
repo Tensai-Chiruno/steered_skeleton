@@ -89,6 +89,7 @@ class Imu {
   float bias_sum_[kAxis] = {0.0f, 0.0f, 0.0f};
   uint32_t calib_count_ = 0;
   uint32_t calib_ticks_ = 0;
+  float raw_yaw_ = 0.0f;  ///< 未经 yaw_offset_ 修正的原始 yaw，resetYaw() 用它当新零点
   bool calib_timeout_ = false;
   float yaw_offset_ = 0.0f;
 };
