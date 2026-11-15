@@ -23,6 +23,7 @@
 #include "main_task.hpp"
 #include "ins_comm.hpp"
 #include "ins_imu.hpp"
+#include "iwdg.h"
 #include "main.h"
 #include "HW_can.hpp"
 #include "gimbal_chassis_comm.hpp"
@@ -39,6 +40,11 @@
 
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
+  /* IWDG 在 MX_IWDG_Init() 时就已经开始倒数（200 ms），而本函数在
+   * HAL_TIM_Base_Start_IT(&htim6) 之前执行，这期间没有任何人喂狗。
+   * 下面每一步（尤其 GetImu()，imuInit 内部有 HAL_Delay 和重试）都要穿插喂狗，
+   * 否则 IMU 没接好时会在初始化阶段被反复复位，表现为“板子像锁死了”。 */
+  HAL_IWDG_Refresh(&hiwdg);
   /* 1) 建立全部电机对象并完成参数配置。
    *    EnsureInit() 在第一次访问 GetMotorXxx 时懒执行，这里主动访问一次，
    *    让「初始化」发生在 while(1) 之前，而不是在第一个中断里。 */
@@ -47,12 +53,15 @@ void MainTaskInit(void) {
     (void)GetMotorSteer(i);
   }
 
+  HAL_IWDG_Refresh(&hiwdg);
+
   /* 2) 双板通讯对象（构造时就绑定 0x210/0x211 与 CAN2） */
   (void)GetGimbalChassisComm();
   (void)GetRemoteControl();  // 两板都收 DBUS
 
   /* 3) 通讯初始化：CAN 滤波器 + 启动外设 + 打开接收中断 */
   CommTaskInit();
+  HAL_IWDG_Refresh(&hiwdg);
 
   /* TODO【第 3 项】: IMU 零漂采集（须在电机使能之后、状态机之前） */
   /* TODO【第 6 项】: 把各模块注册进 Robot */
@@ -62,6 +71,7 @@ void MainTaskInit(void) {
   GetRobot()->registerRemoteControl(GetRemoteControl());
   /* IMU 在主上下文预热一次：imuInit() 内含 HAL_Delay，绝不能第一次就在中断里跑（G-4） */
   (void)GetImu();
+  HAL_IWDG_Refresh(&hiwdg);   /* imuInit 里可能有几十 ms 的延时与重试 */
   GetRobot()->registerImu(GetImu());
   GetRobot()->registerComm(GetGimbalChassisComm());
   GetRobot()->init();
