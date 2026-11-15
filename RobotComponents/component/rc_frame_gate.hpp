@@ -55,6 +55,14 @@ class RcFrameGate {
   bool accept(const RcSticks &now) {
     if (primed_ && Jumped(prev_, now)) {
       ++bad_streak_;
+      if (bad_streak_ >= kBadLimit) {
+        /* 关键：连续拒绝到阈值后必须**重新播种**。
+         * 否则一旦「第一帧本身就是错位帧」（循环 DMA 首次挂载时很容易从帧中间开始），
+         * 它会成为永久基准，之后所有**正确**帧相对它都是跳变 → 永远被拒 →
+         * 遥控永久离线。外部表现是「接收机坏了 / 遥控器没电了」，排查方向完全错。
+         * 这里只清 primed_，bad_streak_ 保持，好让调用方的 shouldDropOnline() 仍然生效。 */
+        primed_ = false;
+      }
       return false;  /* prev_ 不动 = 保持上一帧 */
     }
     prev_ = now;

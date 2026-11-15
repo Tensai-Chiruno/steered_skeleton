@@ -150,6 +150,23 @@ int main(void)
     Check(gate.accept(Sticks(wheel_moved)), "拨轮瞬跳不影响接受（拨轮不纳入判据）");
   }
 
+  /* 5b) 关键回归：连续错位达到阈值后，闸门必须重新播种，
+   *     否则「第一帧就是错位帧」会让正确帧永远被拒（遥控永久离线）。 */
+  {
+    uint8_t bad[18];
+    ShiftLeftOneByte(base, bad);
+    RcFrameGate gate;
+    gate.accept(Sticks(bad));            /* 第一帧就是错位帧 → 成为基准 */
+    Check(gate.accept(Sticks(base)) == false, "错位基准下，正确帧被判成跳变（预期）");
+    Check(gate.accept(Sticks(base)) == false, "第二帧继续被拒");
+    Check(gate.accept(Sticks(base)) == false, "第三帧继续被拒");
+    Check(gate.shouldDropOnline(), "连续 3 帧被拒 → 判离线");
+    /* 重新播种：下一帧无条件成为新基准 */
+    Check(gate.accept(Sticks(base)), "判离线后正确帧被重新接受（闸门已重新播种）");
+    Check(gate.badStreak() == 0u, "重新播种后 bad_streak 归零");
+    Check(gate.accept(Sticks(base)), "后续正确帧持续被接受");
+  }
+
   /* 6) 全 0 帧（接收机掉电/无信号时常见）→ 相对基准是大跳变，必须拒绝 */
   {
     uint8_t zeros[18];
