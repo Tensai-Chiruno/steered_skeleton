@@ -24,6 +24,7 @@
 #include "ins_comm.hpp"
 #include "ins_imu.hpp"
 #include "iwdg.h"
+#include "dbg_snapshot.hpp"
 #include "main.h"
 #include "HW_can.hpp"
 #include "gimbal_chassis_comm.hpp"
@@ -203,6 +204,40 @@ void StatusLedUpdate(void) {
 
 }  // namespace
 
+/* ---------------------------------------------------------------------------
+ * 调试快照填充（只读量，给现场调试器看）
+ * 纯写入，不读、不参与判断，1 kHz 下开销可忽略。
+ * 字段顺序改动时必须同步改 tools/read_vars.py。
+ * ------------------------------------------------------------------------- */
+void DbgPublish(void) {
+  robot::g_dbg.magic = robot::kDbgMagic;
+  robot::g_dbg.tick_ms = hello_world::tick::GetTickMs();
+  for (int i = 0; i < 4; ++i) {
+    auto *s = GetMotorSteer(i);
+    auto *w = GetMotorWheel(i);
+    robot::g_dbg.steer[i] = (s != nullptr) ? s->angle() : 0.0f;
+    robot::g_dbg.wheel_vel[i] = (w != nullptr) ? w->vel() : 0.0f;
+  }
+  const auto *ws = GetChassis()->wheelState();
+  for (int i = 0; i < 4; ++i) {
+    robot::g_dbg.steer_target[i] = ws[i].angle;
+    robot::g_dbg.wheel_target[i] = ws[i].speed;
+  }
+  auto *imu = GetImu();
+  robot::g_dbg.imu_yaw = (imu != nullptr) ? imu->yaw() : 0.0f;
+  robot::g_dbg.imu_pitch = (imu != nullptr) ? imu->pitch() : 0.0f;
+  robot::g_dbg.frame_delta = GetChassis()->frameDelta();
+  robot::g_dbg.tx_fail_count = CAN_GetTxFailCount();
+  auto *rb = GetRobot();
+  robot::g_dbg.life_state = static_cast<uint8_t>(rb->lifeState());
+  robot::g_dbg.chassis_mode = static_cast<uint8_t>(rb->chassisMode());
+  robot::g_dbg.ctrl_source = static_cast<uint8_t>(rb->ctrlSource());
+  robot::g_dbg.imu_ready = rb->isImuReady() ? 1u : 0u;
+  robot::g_dbg.peer_offline = rb->isPeerOffline() ? 1u : 0u;
+  robot::g_dbg.estop = rb->isEmergencyStop() ? 1u : 0u;
+  robot::g_dbg.remote_online = rb->isRemoteOnline() ? 1u : 0u;
+}
+
 void MainTask(void) {
   /* 1 ms 控制周期：读数据 -> 状态迁移 -> 生成指令 -> 下发。
    * 安全前提（急停/模式/在线判定）全部在 Robot 里，这里只做一次调用。 */
@@ -216,6 +251,7 @@ void MainTask(void) {
   }
   SteerZeroSelfCheck();
   StatusLedUpdate();
+  DbgPublish();
 }
 
 /* Private function definitions ----------------------------------------------*/

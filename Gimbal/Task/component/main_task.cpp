@@ -22,6 +22,8 @@
 #include "ins_comm.hpp"
 #include "ins_imu.hpp"
 #include "iwdg.h"
+#include "HW_can.hpp"
+#include "dbg_snapshot.hpp"
 #include "ins_robot.hpp"
 #include "robot.hpp"
 #include "gimbal.hpp"
@@ -87,10 +89,35 @@ uint32_t MainLoopIdleMs(void) {
   return hello_world::tick::GetTickMs() - g_main_loop_ms;
 }
 
+/* ---------------------------------------------------------------------------
+ * 调试快照填充（只读量，给现场调试器看）。云台板没有底盘/舵轮相关量，对应字段留 0。
+ * ------------------------------------------------------------------------- */
+void DbgPublish(void) {
+  robot::g_dbg.magic = robot::kDbgMagic;
+  robot::g_dbg.tick_ms = hello_world::tick::GetTickMs();
+  auto *yaw = GetMotorYaw();
+  auto *pitch = GetMotorPitch();
+  robot::g_dbg.steer[0] = (yaw != nullptr) ? yaw->angle() : 0.0f;
+  robot::g_dbg.steer[1] = (pitch != nullptr) ? pitch->angle() : 0.0f;
+  auto *imu = GetImu();
+  robot::g_dbg.imu_yaw = (imu != nullptr) ? imu->yaw() : 0.0f;
+  robot::g_dbg.imu_pitch = (imu != nullptr) ? imu->pitch() : 0.0f;
+  robot::g_dbg.tx_fail_count = CAN_GetTxFailCount();
+  auto *rb = GetRobot();
+  robot::g_dbg.life_state = static_cast<uint8_t>(rb->lifeState());
+  robot::g_dbg.chassis_mode = 0u;
+  robot::g_dbg.ctrl_source = 0u;
+  robot::g_dbg.imu_ready = rb->isImuReady() ? 1u : 0u;
+  robot::g_dbg.peer_offline = rb->isPeerOffline() ? 1u : 0u;
+  robot::g_dbg.estop = rb->isEmergencyStop() ? 1u : 0u;
+  robot::g_dbg.remote_online = rb->isRemoteOnline() ? 1u : 0u;
+}
+
 void MainTask(void) {
   /* 1 ms 控制周期：读数据 -> 状态迁移 -> 生成指令 -> 下发。
    * 安全前提（急停/模式/在线判定）全部在 Robot 里，这里只做一次调用。 */
   GetRobot()->update();
+  DbgPublish();
 }
 
 /* Private function definitions ----------------------------------------------*/
