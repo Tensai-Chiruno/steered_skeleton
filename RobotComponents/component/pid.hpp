@@ -135,7 +135,9 @@ class Pid {
       return output_;
     }
 
+    // 位置式 PID 的误差定义：期望 − 实测。正误差 = 需要往正方向推。
     float error = target - measured;
+    // 角度环必须回绕：+179° 与 -179° 实际只差 2°，直接相减会得到 358°。
     if (params_.angle_wrap) {
       error = WrapPi(error);
     }
@@ -143,10 +145,11 @@ class Pid {
     /* 第一拍只建立基准，不产生微分——否则 last_measured_ 的初值 0 会被当成
      * 一次真实的巨大跳变。 */
     if (!primed_) {
+      // 用第一拍的实测值当作"上一次"，这样本拍 d_meas = 0，微分项为 0。
       last_measured_ = measured;
       last_error_ = error;
-      deriv_state_ = 0.0f;
-      primed_ = true;
+      deriv_state_ = 0.0f;   // 滤波态也清零，避免从 0 开始缓慢爬升
+      primed_ = true;        // 之后才允许真正计算微分
     }
 
     /* ---------------- 微分项 ---------------- */
@@ -157,12 +160,19 @@ class Pid {
     if (params_.angle_wrap) {
       d_meas = WrapPi(d_meas);
     }
+    // 两种微分取法：
+    //   diff_on_measurement = true  → -d(measured)/dt：目标阶跃不会打出冲激，
+    //                                 代价是把反馈噪声也一起微分放大；
+    //   diff_on_measurement = false → d(error)/dt   ：跟随更快，但目标一跳就抖。
+    // 负号的作用：测量值上升时输出要减小，方向与"误差减小"一致。
     float deriv_raw = params_.diff_on_measurement
                           ? -(d_meas / dt)
                           : ((error - last_error_) / dt);
+    // 先更新"上一次"，再做滤波与输出：保证下一拍的差分基于本拍实测。
     last_measured_ = measured;
     last_error_ = error;
 
+    // 滤波系数做一次防御性夹取：配置写错成 -1 或 2 时不会把状态推飞。
     float keep = params_.deriv_filter_keep;
     if (keep < 0.0f) keep = 0.0f;
     if (keep > 1.0f) keep = 1.0f;
@@ -170,8 +180,11 @@ class Pid {
     deriv_state_ += (1.0f - keep) * (deriv_raw - deriv_state_);
 
     /* ---------------- 积分项（条件积分抗饱和）---------------- */
-    float integral_trial = integral_ + error * dt;
+    // 先算出"如果接受本拍积分会变成多少"，但**先不写回**：
+    // 下面要根据是否饱和来决定到底接不接受（条件积分 / 反算抗饱和）。
+    float integral_trial = integral_ + error * dt;   // 积分状态的单位是"误差×秒"
     if (params_.integral_limit > 0.0f) {
+      // 硬夹一次，防止长期同向误差把状态累到几万（泄起来要好几秒）。
       integral_trial = Clamp(integral_trial, params_.integral_limit);
     }
 
@@ -179,25 +192,39 @@ class Pid {
      *   没饱和        → 接受积分
      *   饱和且误差仍在推它更深 → 拒绝（回滚），这是抗饱和的关键一步
      *   饱和但误差已反向      → 接受，让积分能泄掉，否则卡在限幅上出不来 */
+    // 用"试探积分"开环算一次输出，只是为了判断它会不会撞限幅。
     float out_open =
         params_.kp * error + params_.ki * integral_trial + params_.kd * deriv_state_;
+    // output_limit <= 0 时 Saturates() 恒返回 false（= 不限幅）。
     bool saturated = Saturates(out_open);
 
+    // 三种情况：
+    //   1) 没饱和                        → 接受（正常积分）
+    //   2) 饱和 且 误差与输出同号（还在往深处推）→ 拒绝，rollback 到旧积分
+    //   3) 饱和 但 误差已反向（error*out_open<0）→ 接受，让积分能泄掉，
+    //      否则会一直卡在限幅上出不来，脱限后表现为长时间超调
     if (!saturated || (error * out_open < 0.0f)) {
       integral_ = integral_trial;
     }
-    saturated_ = saturated;
+    saturated_ = saturated;   // 只作为观测量，供调试/状态灯使用
 
     /* ---------------- 输出 ---------------- */
+    // 用**最终被接受的** integral_ 重算一次输出（不是直接用 out_open）：
+    // 抗饱和回滚时，输出必须反映回滚后的积分值，否则回滚就白做了。
     output_ = params_.kp * error + params_.ki * integral_ + params_.kd * deriv_state_;
+    // 最后再硬夹一次。output_limit 与执行器量纲一致（raw / A / N·m）。
     output_ = Clamp(output_, params_.output_limit);
     return output_;
   }
 
   /* ---------------- 调试访问（RTT 打印用）---------------- */
+  /// 积分状态（单位"误差×秒"）。整定时用它看积分有没有一直涨。
   float integral(void) const { return integral_; }
+  /// 滤波后的微分项，撞限位看它是否被噪声打爆。
   float derivative_state(void) const { return deriv_state_; }
+  /// 上一次输出，用于"dt 非法时保持输出"。
   float last_output(void) const { return output_; }
+  /// 上一拍是否撞了输出限幅（抗饱和是否被触发）。
   bool saturated(void) const { return saturated_; }
 
   /* ---------------- 工具：给运动学与云台限位复用 ---------------- */
@@ -216,15 +243,20 @@ class Pid {
   static float WrapPi(float angle) {
     /* 用 fmod 而不是"±2π 循环加减"：后者在角度很大（多圈累计）时要循环很多次，
      * 而且循环次数不确定，不适合出现在 1 ms 硬实时任务里。 */
+    // 先把区间平移到 [0, 2π)：加 π 让 [-π,π) 变成 [0,2π)，再取模。
     float a = std::fmod(angle + kPi, 2.0f * kPi);
+    // fmod 对负数返回负值（C++ 语义），补一次把结果拉回 [0, 2π)。
     if (a < 0.0f) {
       a += 2.0f * kPi;
     }
+    // 再平移回 [-π, π)。
     return a - kPi;
   }
 
   /** @brief 对称限幅。limit<=0 时原值返回（= 不限幅）。 */
   static float Clamp(float value, float limit) {
+    // limit <= 0 约定为"不限幅"。这是刻意的：出厂默认 limit=0，
+    // 配合"增益全 0"，未整定时输出恒 0（失效安全）。
     if (limit <= 0.0f) {
       return value;
     }
@@ -238,6 +270,7 @@ class Pid {
   }
 
  private:
+  /// 判断"开环输出是否撞限幅"。output_limit<=0 时视为不限幅，永不饱和。
   bool Saturates(float out_open) const {
     if (params_.output_limit <= 0.0f) {
       return false;

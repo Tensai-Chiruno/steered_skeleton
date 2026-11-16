@@ -27,6 +27,8 @@ constexpr float kDt = 1e-3f;
 
 namespace robot {
 
+/// 摇杆死区：|v| 小于 db 就当作 0。
+/// 目的不是"手感"，而是防止静止时摇杆中位漂移（±0.01 量级）让车缓慢爬行。
 float Robot::Deadband(float v, float db) {
   return (v > -db && v < db) ? 0.0f : v;
 }
@@ -34,24 +36,26 @@ float Robot::Deadband(float v, float db) {
 /* 摇杆原始值域实测可能是 ±1.55（P1-11），在这里统一夹到 ±1，
  * 保证「满舵 = 设计车速」这件事与 DT7 的实际量程无关。 */
 float Robot::ClampNorm(float v) {
-  if (!(v == v)) return 0.0f;
-  if (v > 1.0f) return 1.0f;
-  if (v < -1.0f) return -1.0f;
+  if (!(v == v)) return 0.0f;   // NaN → 0：绝不让它乘上速度上限再传下去
+  if (v > 1.0f) return 1.0f;    // 满舵夹到 +1
+  if (v < -1.0f) return -1.0f;  // 满舵夹到 -1
   return v;
 }
 
 
 void Robot::init(void) {
+  // 全部状态置成"最安全"的初值：上电后即使 update() 立刻被调用，
+  // 也一定是 Dead + 急停 + 输出归零，车不会动。
   life_state_ = LifeState::kDead;
   mode_ = ChassisMode::kDepart;
   ctrl_source_ = CtrlSource::kNone;
   motion_.reset();
   yaw_error_ = 0.0f;
   rc_online_ = false;
-  estop_ = true;
-  peer_offline_ = true;
-  imu_ready_ = false;
-  inited_ = true;
+  estop_ = true;        // 上电即视为急停：必须先看到"拨杆在 Up/Mid"才解除
+  peer_offline_ = true; // 上电时对端肯定不在线，等第一帧双板帧到达
+  imu_ready_ = false;   // IMU 未标定完成前不许进 Working
+  inited_ = true;       // 置位后 update() 才开始真正工作
   if (chassis_ != nullptr) {
     chassis_->setTarget(motion_);
     chassis_->setEnabled(false);
@@ -59,13 +63,17 @@ void Robot::init(void) {
 }
 
 void Robot::updateRemote(void) {
+  // 遥控在线 = 收到过合法帧 且 最近 100 ms 内有更新（见 ins_comm_state.cpp）。
   rc_online_ = IsRemoteOnline();
   if (!rc_online_ || rc_ == nullptr) {
+    // 离线即急停：这是考核 1.3「失效即归零」的第一层。
+    // 注意这里 return 之前没有清 peer_offline_，那是有意的：
+    // 遥控掉了就够判急停了，不必再依赖对端状态。
     ctrl_source_ = CtrlSource::kNone;
     estop_ = true;
     return;
   }
-  ctrl_source_ = CtrlSource::kRemote;
+  ctrl_source_ = CtrlSource::kRemote;   // 这一拍的运动指令来源于遥控器
 
   /* 急停判据用白名单（P2-22 / N-4）：
    * 只有明确落在 Up / Mid 才不算急停；未知编码（含 0）一律按急停处理。
@@ -83,13 +91,16 @@ void Robot::updateRemote(void) {
   /* P1-8①：CAN 发送持续失败 = 对端在、但发不出去（bus-off / 邮箱被重传占满）。
    * 只在对端"在线"时才判：单板台架没有 ACK，发送失败是常态，不能因此刹车。 */
   {
+    // 用"计数是否在涨"来判断，而不是直接看单次返回值：
+    // 单次失败可能只是邮箱短暂满，连续 20 ms 都在涨才说明总线真出问题。
     const uint32_t fail_now = CAN_GetTxFailCount();
     if (fail_now != last_tx_fail_) {
       last_tx_fail_ = fail_now;
-      ++tx_fail_streak_;
+      ++tx_fail_streak_;                 // 这一拍又失败了一次
     } else if (tx_fail_streak_ > 0u) {
-      --tx_fail_streak_;
+      --tx_fail_streak_;                 // 没再失败就慢慢衰减，避免误判偶发
     }
+    // 只有"对端在线"时才据此刹车：单板台架没有 ACK，发送失败是常态。
     if (!peer_offline_ && tx_fail_streak_ >= 20u) {
       estop_ = true;
     }
@@ -116,9 +127,12 @@ void Robot::updateRemote(void) {
    *   （底盘把自己的 yaw 发给云台、由云台算相对角），
    *   绝不能拿两块板各自的开机零点相减。
    * 对端离线时 δ 不可信，保持 0（此时也已急停，车不会动）。 */
+  // 默认 δ = 0（等价于"云台与车头同向"），对端离线时保持这个安全缺省。
   float delta = 0.0f;
   if (!peer_offline_ && comm_ != nullptr) {
+    // 直接取云台发布的相对角，**不减去本板 IMU 的 yaw**（见上方参考系说明）。
     delta = comm_->remote().yaw;
+    // 回绕到 [-π, π)：进三角函数前必须归一化，否则 359°→1° 会反向大转。
     delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
   }
   /* 【调试】现场翻号开关（不属于考核功能，提交前应固定符号并删除本段）
@@ -135,6 +149,8 @@ void Robot::updateRemote(void) {
 }
 
 void Robot::enterDead(void) {
+  // 进入顺序有讲究：先改状态 → 清运动指令 → 再让底盘失能并清零。
+  // 若先清零再改状态，中间这一拍 chassis_->update() 可能用旧 target 输出一次。
   life_state_ = LifeState::kDead;
   motion_.reset();
   if (chassis_ != nullptr) {
@@ -145,6 +161,10 @@ void Robot::enterDead(void) {
 }
 
 void Robot::enterResurrection(uint32_t now) {
+  // 自检期的三个动作：
+  //   1) 记下起点时间（后面用它算 hold 是否到期）
+  //   2) 运动指令清零（自检期不接受运动指令）
+  //   3) 使能底盘（舵角要能回中、IMU 要能收敛，但目标速度是 0）
   life_state_ = LifeState::kResurrection;
   resurrection_start_ms_ = now;
   motion_.reset();
@@ -159,21 +179,30 @@ void Robot::enterWorking(void) {
 }
 
 void Robot::updateLifeState(uint32_t now) {
+  // 三态迁移。每个分支都先处理"退出条件"，再处理"进入条件"。
   switch (life_state_) {
     case LifeState::kDead:
+      // 每拍都重新执行 enterDead()：让 Dead 成为"持续维持"的状态，
+      // 而不是"只在进入时清零一次"。这样任何外部误写输出都会被下一拍压回 0。
       enterDead();
+      // 进入自检的门槛：遥控在线 且 没有急停（拨杆不在 Down）。
       if (rc_online_ && !estop_) enterResurrection(now);
       break;
 
     case LifeState::kResurrection:
+      // 自检期间任何一道安全门破了，立刻退回 Dead（不是留在自检里）。
       if (!rc_online_ || estop_) { enterDead(); break; }
       /* 两道条件同时满足才准进 Working：计时到了 且 IMU 真的就绪 */
+      // 为什么还要计时：电机使能后舵角回中需要时间，IMU 也需要静置才能标零漂。
+      // 为什么还要 imu_ready_：计时只是"等够久"，不代表标定真的成功（可能超时降级）。
       if ((now - resurrection_start_ms_) >= params_.resurrection_hold_ms && imu_ready_) {
         enterWorking();
       }
       break;
 
     case LifeState::kWorking:
+      // Working 是最危险的状态，所以退出条件最多：遥控掉、急停、IMU 失效，
+      // 任意一条成立都立刻退回 Dead 并把输出清零。
       if (!rc_online_ || estop_ || !imu_ready_) enterDead();
       break;
 
@@ -184,6 +213,7 @@ void Robot::updateLifeState(uint32_t now) {
 }
 
 void Robot::updateMode(void) {
+  // 右拨杆三档映射到三种底盘模式；没有遥控器时给最保守的"分离"。
   if (rc_ == nullptr) { mode_ = ChassisMode::kDepart; return; }
   switch (rc_->rc_r_switch()) {
     case hello_world::remote_control::kSwitchStateUp:   mode_ = ChassisMode::kDepart; break;
@@ -198,6 +228,9 @@ void Robot::updateMotion(void) {
   if (life_state_ != LifeState::kWorking || rc_ == nullptr) return;
   if (ctrl_source_ != CtrlSource::kRemote) return;
 
+  // 平移：左摇杆竖 → vx（推前为正），左摇杆横 → vy。
+  // 注意这里的 (vx, vy) 是**云台坐标系**，旋转到车体系由 Chassis 负责（考核 3.2）。
+  // 三步处理：先夹到 ±1（吸收 DT7 实际量程差异）→ 过死区 → 乘上限。
   motion_.vx = Deadband(ClampNorm(rc_->rc_lv()), params_.remote_deadband) * params_.max_vx;
   motion_.vy = Deadband(ClampNorm(rc_->rc_lh()), params_.remote_deadband) * params_.max_vy;
 
@@ -219,6 +252,7 @@ void Robot::updateMotion(void) {
 }
 
 void Robot::update(void) {
+  // 未初始化完就直接返回：此时各模块指针可能还是空的。
   if (!inited_) return;
   /* 姿态链必须每拍真的更新一次：只查 isReady() 而不调 update() 的话，
    * 零偏标定永远不推进，状态机永远进不了 Working（这也是 nm 查出来的死代码）。 */
@@ -228,12 +262,21 @@ void Robot::update(void) {
 
   const uint32_t now = hello_world::tick::GetTickMs();
 
+  // ★ 调用顺序不能换，每一步都依赖上一步的结论：
+  //   updateRemote    → 决定 rc_online_ / estop_ / peer_offline_ / imu_ready_ / δ
+  //   updateLifeState → 用上面这些标志做状态迁移（决定这一拍能不能动）
+  //   updateMode      → 读右拨杆，决定 w 的来源
+  //   updateMotion    → 依赖 life_state（非 Working 直接给 0）与 mode_
   updateRemote();
   updateLifeState(now);
   updateMode();
   updateMotion();
 
   if (chassis_ != nullptr) {
+    // 先下发目标，再设使能，最后让底盘算这一拍：
+    //   setTarget  → 这一拍的速度指令
+    //   setEnabled → 只有 Working 才允许输出（false 会立刻清 0）
+    //   update()   → 限幅 → δ 变换 → 逆解 → 8 个 PID → setInput
     chassis_->setTarget(motion_);
     chassis_->setEnabled(life_state_ == LifeState::kWorking);
     chassis_->update();
@@ -242,7 +285,9 @@ void Robot::update(void) {
   /* 双板帧语义字段的唯一写者（P1-3）。底盘板的 local 帧只承载状态，
    * 角度由云台板填，所以这里不写 yaw/pitch。 */
   if (comm_ != nullptr) {
+    // 这四个字段**只有这里能写**（旧代码在 comm_task 里每拍覆盖，导致别人改了也没用）。
     auto &f = comm_->local();
+    // online：只要不是 Dead 就自报在线（Dead 时对端应当据此进入保护）。
     f.online = (life_state_ != LifeState::kDead) ? 1u : 0u;
     f.ready = imu_ready_ ? 1u : 0u;
     f.work_mode = ToByte(mode_);
