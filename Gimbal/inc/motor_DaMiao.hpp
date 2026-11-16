@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      : motor_DaMiao.hpp
  * @brief     : 达妙电机类
+ * @category : 功能+骨架 | 提供件，我们加了 Float2Uint 有限性判断
  * @history   :
  *  Version     Date            Author          Note
  *  V0.9.0      2023-11-25      Caikunzhen      1. 未测试版本

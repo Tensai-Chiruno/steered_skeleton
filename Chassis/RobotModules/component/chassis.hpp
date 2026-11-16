@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :chassis.hpp
  * @brief     :底盘运动模块（舵向轮逆解 + 8 个闭环）
+ * @category : 功能 | 考核第 6 项（底盘闭环；含 1 处调试访问器）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版
@@ -70,7 +71,8 @@ class Chassis {
   /** @brief 所有电机输入置 0（急停 / 未就绪时调用）。 */
   void setOutputZero(void);
 
-  /** @brief 反解得到的 4 组舵角/轮速，供调试与测试读取。 */
+  /** @brief 【调试】反解得到的 4 组舵角/轮速，只给调试快照用；
+   *         不影响控制，删掉也不影响功能。 */
   const hello_world::chassis_ik_solver::ChassisIkSolver::WheelState *wheelState(void) const {
     return wheel_state_;
   }

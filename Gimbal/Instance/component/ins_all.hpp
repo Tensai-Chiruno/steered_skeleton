@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_all.hpp
  * @brief     :
+ * @category : 功能 | 汇总 include
  * @history   :
  *  Version     Date            Author          Note
  *  V0.9.0      yyyy-mm-dd      <author>        1. <note>

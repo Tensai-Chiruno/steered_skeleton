@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :imu.hpp
  * @brief     :IMU 封装：BMI088 原始数据 + Mahony 姿态 + 开机零漂
+ * @category : 功能 | 考核第 4 项（Imu 封装类）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

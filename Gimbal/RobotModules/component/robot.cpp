@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :robot.cpp
  * @brief     :云台板顶层状态机实现
+ * @category : 功能 | 考核第 9 项（状态机）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

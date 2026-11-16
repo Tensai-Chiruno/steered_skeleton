@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_pid.cpp
  * @brief     :PID 实例（Chassis）
+ * @category : 功能 | 考核第 3 项（PID 实例与限幅）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

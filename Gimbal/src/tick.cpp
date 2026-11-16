@@ -4,6 +4,7 @@
  *******************************************************************************
  * @file      : tick.cpp
  * @brief     : 系统滴答定时器驱动源文件
+ * @category : 功能+骨架 | 提供件，修了 USE_UNIX_TICK 签名
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2023-10-31      ZhouShichan     1. 完成正式版

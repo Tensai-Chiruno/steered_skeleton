@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_robot.cpp
  * @brief     :底盘板 Robot / Chassis 单例
+ * @category : 功能 | 考核第 9 项（单例）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

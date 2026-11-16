@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :gimbal_chassis_comm_codec.cpp
  * @brief     :双板通讯帧编解码实现
+ * @category : 功能 | 考核第 8 项（8 字节帧编解码）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

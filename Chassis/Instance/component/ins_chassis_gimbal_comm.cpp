@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_chassis_gimbal_comm.cpp
  * @brief     :本板双板通讯对象实现（Chassis）
+ * @category : 功能 | 考核第 8 项（双板实例与 CAN ID）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

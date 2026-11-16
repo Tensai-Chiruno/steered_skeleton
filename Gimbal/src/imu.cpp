@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :imu.cpp
  * @brief     :IMU 封装实现
+ * @category : 功能 | 考核第 4 项（Imu 封装实现）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_imu.cpp
  * @brief     :IMU 单例（Chassis）
+ * @category : 功能 | 考核第 4 项（IMU 实例）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

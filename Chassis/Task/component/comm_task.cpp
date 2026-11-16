@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :comm_task.cpp
  * @brief     :通讯层初始化与周期发送（底盘板）
+ * @category : 功能 | 考核第 2/10 项（CAN+DBUS+喂狗）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

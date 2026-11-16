@@ -1,7 +1,8 @@
 /**
  *******************************************************************************
  * @file      :gimbal_chassis_comm.hpp
- * @brief     :底盘↔云台双板 CAN 通讯（考核第 9 项）
+ * @brief     :底盘↔云台双板 CAN 通讯（考核第 8 项）
+ * @category : 功能 | 考核第 8 项（双板通讯类）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 帧布局 + 编解码 + 离线判断

@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :gimbal.hpp
  * @brief     :云台 yaw / pitch 关节空间控制
+ * @category : 功能 | 考核第 7 项（云台两轴位置环）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

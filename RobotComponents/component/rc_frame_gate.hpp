@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :rc_frame_gate.hpp
  * @brief     :DBUS 摇杆跳变闸门（错帧保护）
+ * @category : 功能 | 安全（遥控错帧保护，防鬼指令）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

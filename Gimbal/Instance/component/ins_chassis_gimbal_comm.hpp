@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_chassis_gimbal_comm.hpp
  * @brief     :本板双板通讯对象单例（Gimbal）
+ * @category : 功能 | 考核第 8 项
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

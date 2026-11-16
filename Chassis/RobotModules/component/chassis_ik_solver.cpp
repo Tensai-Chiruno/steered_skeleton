@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :chassis_ik_solver.cpp
  * @brief     :舵向轮底盘逆运动学实现
+ * @category : 功能 | 考核第 6 项（舵轮逆解）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

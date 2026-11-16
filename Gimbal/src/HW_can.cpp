@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      : HW_can.cpp
  * @brief     : CAN 收发基础封装实现
+ * @category : 功能+骨架 | 提供件，我们补了 ID 分发/滤波器初始化/返回值
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-09-18      Hello World     1. 考核骨架：CanFilter_Init + CAN_Send_Msg

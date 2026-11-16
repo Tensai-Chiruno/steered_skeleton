@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_chassis_iksolver.cpp
  * @brief     :底盘逆解器单例
+ * @category : 功能 | 考核第 6 项（逆解实例与几何参数）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

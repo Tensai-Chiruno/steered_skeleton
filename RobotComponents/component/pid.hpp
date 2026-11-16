@@ -1,7 +1,8 @@
 /**
  *******************************************************************************
  * @file      : pid.hpp
- * @brief     : 通用单轴 PID 控制器（考核第 4 项）
+ * @brief     : 通用单轴 PID 控制器（考核第 3 项）
+ * @category : 功能 | 考核第 3 项（PID 类）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-04      Hello World     1. 位置式 PID + 条件积分抗饱和 +

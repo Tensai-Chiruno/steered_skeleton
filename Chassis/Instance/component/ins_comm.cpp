@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_comm.cpp
  * @brief     :遥控器解码对象单例（Chassis）
+ * @category : 功能 | 考核第 2 项（遥控器实例）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

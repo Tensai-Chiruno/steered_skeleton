@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :module_state.hpp
  * @brief     :两板共享的状态枚举与运动结构（考核第 5 项）
+ * @category : 功能 | 考核第 5 项（两板共享类型）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      : ahrs_base.cpp
  * @brief     : 姿态解算基类
+ * @category : 功能+骨架 | 提供件，我们加了 asinf 钳位
  * @history   :
  *  Version     Date            Author          Note
  *  V0.9.0      2023-12-12      Caikunzhen      1. 完成编写（未测试）

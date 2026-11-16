@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :gimbal_chassis_comm.cpp
  * @brief     :底盘↔云台双板 CAN 通讯实现
+ * @category : 功能 | 考核第 8 项（双板通讯类）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 帧打包/解包 + 离线判断

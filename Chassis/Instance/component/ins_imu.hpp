@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_imu.hpp
  * @brief     :
+ * @category : 功能 | 考核第 4 项
  * @history   :
  *  Version     Date            Author          Note
  *  V0.9.0      yyyy-mm-dd      <author>        1. <note>

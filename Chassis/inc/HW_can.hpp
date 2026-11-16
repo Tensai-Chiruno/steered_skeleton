@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      : HW_can.hpp
  * @brief     : CAN 收发基础封装（滤波器初始化 + 发送）
+ * @category : 功能+骨架 | 提供件，我们只加了发送失败计数(诊断)
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-09-18      Hello World     1. 考核骨架：只提供 CAN filter 与发送，
@@ -51,7 +52,7 @@ bool CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
 /** @brief 累计发送失败次数（邮箱满 / bus-off / 无 ACK）。单板台架无对端时非零属正常。 */
 uint32_t CAN_GetTxFailCount(void);
 
-/** @brief 最近一次发送是否成功。 */
+/** @brief 【调试】最近一次发送是否成功。当前无调用者，仅留作调试观察。 */
 bool CAN_LastTxOk(void);
 
 #ifdef __cplusplus

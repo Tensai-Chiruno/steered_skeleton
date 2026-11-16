@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_motor.cpp
  * @brief     :底盘板电机实例 + CAN 帧分发/打包
+ * @category : 功能 | 考核第 1 项（10 台电机配置 + CAN 分发）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 4xM3508 + 4xGM6020 实例化，

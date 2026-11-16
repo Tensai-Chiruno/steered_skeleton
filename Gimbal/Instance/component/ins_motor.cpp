@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_motor.cpp
  * @brief     :云台板电机实例（yaw / pitch DM-J4310）+ CAN 帧分发/打包
+ * @category : 功能 | 考核第 1 项（10 台电机配置 + CAN 分发）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. yaw/pitch 实例化，接收分发与发送

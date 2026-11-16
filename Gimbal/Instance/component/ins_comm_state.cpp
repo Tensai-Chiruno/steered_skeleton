@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :ins_comm_state.cpp
  * @brief     :遥控器接收状态实现（Gimbal）
+ * @category : 功能 | 考核第 2 项（遥控在线判定）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 首版

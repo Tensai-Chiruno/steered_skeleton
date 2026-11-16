@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :gimbal_chassis_comm_codec.hpp
  * @brief     :双板通讯帧的纯字节编解码（无 tick / 无 HAL 依赖）
+ * @category : 功能 | 考核第 8 项（8 字节帧编解码）
  * @history   :
  *  Version     Date            Author          Note
  *  V1.0.0      2026-11-08      Tensai-Chiruno  1. 8 字节帧布局 + 校验

@@ -2,6 +2,7 @@
  *******************************************************************************
  * @file      :comm_task.hpp
  * @brief     :
+ * @category : 功能 | 考核第 2/10 项
  * @history   :
  *  Version     Date            Author          Note
  *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
