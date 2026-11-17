@@ -72,6 +72,13 @@ constexpr uint32_t kEnableRetryMs = 500u;
 bool g_enable_dirty = true;
 uint32_t g_last_enable_ms = 0;
 
+/* 【诊断·临时】把电机状态摊出来给 SWD 看（排障完删掉）：
+ *   [0] yaw 使能  [1] pitch 使能
+ *   [2] yaw 模式  [3] pitch 模式
+ *   [4] yaw encode 是否成功  [5] pitch encode 是否成功
+ * 这四项能一次回答"电机到底有没有使能、模式对不对、帧发没发出去"。 */
+uint8_t g_diag_motor[16];
+
 void EnsureInit(void) {
   if (inited_) {
     return;
@@ -85,7 +92,7 @@ void EnsureInit(void) {
   opt_yaw.remove_build_in_reducer = false;
   opt_yaw.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
   opt_yaw.angle_offset = kYawOffset;
-  yaw_.init(kYawId, opt_yaw, false, false);  /* auto_enable=false, enable_mode_switch=false：改由 MotorSendAllCommands 限频显式使能 */
+  yaw_.init(kYawId, opt_yaw, false, true);  /* auto_enable=false, enable_mode_switch=false：改由 MotorSendAllCommands 限频显式使能 */
 
   /* pitch：只用关节角的一小段，限位由上层用反馈角度做，不在这里卡死 */
   hello_world::motor::OptionalParams opt_pitch;
@@ -95,7 +102,7 @@ void EnsureInit(void) {
   opt_pitch.remove_build_in_reducer = false;
   opt_pitch.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
   opt_pitch.angle_offset = kPitchOffset;
-  pitch_.init(kPitchId, opt_pitch, false, false);  /* 同上 */
+  pitch_.init(kPitchId, opt_pitch, false, true);  /* 同上 */
 
   /* 把期望的 CAN ID 钉死：DM 的反馈恒为 id + 0x10，控制恒为 id。
    * 这条同时是对「考核说明表格写反了」的固化——真实情况以设备类为准，
@@ -213,14 +220,24 @@ void MotorSendAllCommands(void) {
   for (int i = 0; i < 8; ++i) {
     buf[i] = 0;
   }
-  if (yaw_.encode(buf)) {
+  g_diag_motor[0] = yaw_.is_enabled() ? 1u : 0u;
+  g_diag_motor[1] = pitch_.is_enabled() ? 1u : 0u;
+  g_diag_motor[2] = static_cast<uint8_t>(yaw_.current_ctrl_mode());
+  g_diag_motor[3] = static_cast<uint8_t>(pitch_.current_ctrl_mode());
+  bool ok_y = yaw_.encode(buf);
+  g_diag_motor[4] = ok_y ? 1u : 0u;
+  if (ok_y) {
     CAN_Send_Msg(kMotorBus, buf, yaw_.tx_id(), 8);
   }
 
   for (int i = 0; i < 8; ++i) {
     buf[i] = 0;
   }
-  if (pitch_.encode(buf)) {
+  bool ok_p = pitch_.encode(buf);
+  g_diag_motor[8] = buf[6];  /* 诊断：pitch MIT 帧的力矩高 4 位 */
+  g_diag_motor[9] = buf[7];  /* 诊断：pitch MIT 帧的力矩低 8 位 */
+  g_diag_motor[5] = ok_p ? 1u : 0u;
+  if (ok_p) {
     CAN_Send_Msg(kMotorBus, buf, pitch_.tx_id(), 8);
   }
 }

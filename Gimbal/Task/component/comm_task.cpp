@@ -38,6 +38,11 @@ uint8_t g_dbus_buf[kDbusFrameLen];
  * 不通过时 GetRemoteControl() 里的 rc_*_ 一个字节都没被改过。 */
 hello_world::remote_control::DT7 g_rc_scratch;
 hello_world::comm::RcFrameGate g_rc_gate;
+/* 【诊断】UART 原始字节（54 字节 ≈ 3 帧）。只在 CommTaskInit 里抓一次，
+ * 用 SWD 直接读内存看，不参与任何控制逻辑；排障完可以整段删掉。 */
+uint8_t g_diag_uart[54];
+/* 诊断：最近一次 DBUS 对齐偏移（正常应恒为 0） */
+volatile uint8_t diag_db_align = 0xFF;
 }  // namespace
 
 /* Exported function definitions ---------------------------------------------*/
@@ -58,6 +63,17 @@ void CommTaskInit(void) {
    *    且 DMA1_Stream1 是【循环模式】（见 usart.c），所以只需要启动一次，
    *    不需要每帧重启接收。
    *    关掉半传输中断：DBUS 每 14 ms 才来一帧，半满中断只会制造无谓负载。 */
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
+  __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
+
+  /* 4) 【诊断·一次性】把 UART 原始字节抓下来，不做任何解码，直接用 SWD 读。
+   *    目的：排除"我们的解码/缓冲区对齐错了"这一可能——把字节流原样摊开看：
+   *      有没有 18 字节周期、有没有 0x0F 之类的 SBUS 头、
+   *      通道字节是 0x6C/0x01（油门最低）还是 0x00/0x04（居中）。
+   *    只在启动时做一次，抓完立刻恢复正常的"空闲+DMA"接收。
+   *    阻塞时间 ≈ 3 帧 ≈ 40 ms，远小于 IWDG 的 200 ms。 */
+  HAL_UART_AbortReceive(&huart3);
+  (void)HAL_UART_Receive(&huart3, g_diag_uart, sizeof(g_diag_uart), 60u);
   HAL_UARTEx_ReceiveToIdle_DMA(&huart3, g_dbus_buf, sizeof(g_dbus_buf));
   __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
 }
@@ -100,20 +116,48 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
     return;
   }
   if (Size >= kDbusFrameLen) {
-    /* DBUS 没有固定帧头，掉 1 字节后长度仍是 18，`Size >= 18` 判不出来。
-     * 用"摇杆单帧跳变"当错帧判据：143 Hz 下真摇杆不可能一帧跳 >0.45。
-     * 不可信时保持上一帧值（不清零），连续 3 帧按离线走现成急停。 */
-    g_rc_scratch.decode(g_dbus_buf);
-    hello_world::comm::RcSticks now;
-    now.lv = g_rc_scratch.rc_lv();
-    now.lh = g_rc_scratch.rc_lh();
-    now.rv = g_rc_scratch.rc_rv();
-    now.rh = g_rc_scratch.rc_rh();
-    if (g_rc_gate.accept(now)) {
-      *GetRemoteControl() = g_rc_scratch;
-      NotifyRemoteFrame();
-    } else if (g_rc_gate.shouldDropOnline()) {
-      InvalidateRemote();   /* 连续可疑：立即判离线，车停住 */
+    /* 【关键修复 2026-11-17】对齐自愈。
+     *
+     * 现场现象：遥控数据时好时坏——同样的固件，有时解出 s1=s2=3（合法中位）、
+     * 目标值与姿态都正常；有时解出 s1=s2=0（非法值）→ 被状态机判成"急停"→
+     * 云台在 Working / Dead 之间反复跳。
+     *
+     * 根因：DBUS 是 18 字节定长帧但**没有帧头**，靠"空闲中断 + 循环 DMA"接收时，
+     * 只要某次少收/多收一个字节，缓冲区起点就会永久错位——长度仍是 18，
+     * 用 `Size >= 18` 根本发现不了，于是整帧被当成另一个"合法的错帧"。
+     *
+     * 修法：逐字节旋转试探，取第一个"两个拨杆值都在 1..3 之间"的解。
+     * 拨杆只有 1/2/3 三种取值，错位帧几乎不可能同时凑出两个合法值，
+     * 这个判据的区分度远高于"摇杆跳变"。
+     */
+    bool aligned = false;
+    for (uint16_t r = 0; r < kDbusFrameLen; ++r) {
+      uint8_t tmp[kDbusFrameLen];
+      for (uint16_t k = 0; k < kDbusFrameLen; ++k) {
+        tmp[k] = g_dbus_buf[(r + k) % kDbusFrameLen];
+      }
+      g_rc_scratch.decode(tmp);
+      const auto s1 = g_rc_scratch.rc_l_switch();
+      const auto s2 = g_rc_scratch.rc_r_switch();
+      if (s1 >= 1u && s1 <= 3u && s2 >= 1u && s2 <= 3u) {
+        aligned = true;
+        diag_db_align = r;   /* 诊断：记录本次对齐偏移（正常应恒为 0） */
+        break;
+      }
+    }
+
+    if (aligned) {
+      hello_world::comm::RcSticks now;
+      now.lv = g_rc_scratch.rc_lv();
+      now.lh = g_rc_scratch.rc_lh();
+      now.rv = g_rc_scratch.rc_rv();
+      now.rh = g_rc_scratch.rc_rh();
+      if (g_rc_gate.accept(now)) {
+        *GetRemoteControl() = g_rc_scratch;
+        NotifyRemoteFrame();
+      } else if (g_rc_gate.shouldDropOnline()) {
+        InvalidateRemote();   /* 连续可疑：立即判离线，车停住 */
+      }
     }
   }
   /* 循环 DMA 下不需要重启；只有出错导致 RxState 掉出 BUSY 时才补一次 */

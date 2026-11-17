@@ -291,6 +291,18 @@ bool DaMiao::encode(uint8_t data[8])
     encodeWriteParam(
         data, CTRL_MODE,
         static_cast<uint32_t>(comm_data_.target_ctrl_mode));
+    /* 【现场修复 2026-11-17】写完 CTRL_MODE 就乐观确认模式已切换。
+     *
+     * 为什么必须这样：达妙电机的**反馈帧里不含控制模式**，
+     * 所以 dm_status_.current_ctrl_mode 永远停在 kUnknown，
+     * needModeSwitch() 就恒为真 —— 结果是每 1 ms 都在写模式寄存器，
+     * 一帧 MIT 都发不出去（现场现象：调试变量显示"发帧=1"但电机毫无力矩）。
+     *
+     * 寄存器写是"发出去就算数"的命令（电机不回报确认），
+     * 所以这里直接把当前模式记为目标模式，下一帧起就走 MIT 分支。
+     * 若真需要读回校验，应当用 encodeReadParam 单独读 CTRL_MODE，
+     * 而不是靠"没收到反馈就不停重写"。 */
+    dm_status_.current_ctrl_mode = comm_data_.target_ctrl_mode;
   } else {
     switch (dm_status_.current_ctrl_mode) {
       case CtrlMode::kMIT:
