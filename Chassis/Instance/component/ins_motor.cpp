@@ -59,7 +59,12 @@ CAN_HandleTypeDef *const kSteerBus = &hcan1;
 constexpr uint8_t kWheelId[kWheelNum] = {1, 2, 3, 4};
 constexpr hello_world::motor::Dir kWheelDir[kWheelNum] = {
     hello_world::motor::kDirFwd, hello_world::motor::kDirFwd,
-    hello_world::motor::kDirFwd, hello_world::motor::kDirFwd};
+    hello_world::motor::kDirFwd, hello_world::motor::kDirRev};  // RF 反向：
+/* 现场实测 2026-11-17（J-Link 读 robot::g_dbg，前推车身时四轮轮速符号）：
+ *   前推 → LF +1.53  LB +1.69  RB +1.62  RF -1.14
+ *   回拉 → LF -3.10  LB -2.86  RB -2.89  RF +2.69   （三段来回，符号完全可复现）
+ * 三个轮「前推为正」= kDirFwd 正确；RF 相反，且它的舵零位同时差 180°（见 kSteerOffset[3]），
+ * 两者是同一个物理事实的两面：RF 的舵轮装配方向与另外三个差 π。 */
 
 /* 舵电机：id 1~4，保留内置减速器（ex_redu_rat = 1），方向全部反向。
  * 舵向零点偏移来自考核说明 6.2「已按实机配置统一补齐」的固定值，必须照抄：
@@ -70,7 +75,12 @@ constexpr hello_world::motor::Dir kSteerDir[kSteerNum] = {
     hello_world::motor::kDirRev, hello_world::motor::kDirRev,
     hello_world::motor::kDirRev, hello_world::motor::kDirRev};
 constexpr float kSteerOffset[kSteerNum] = {2.61346f, -2.06844f, 0.00729f,
-                                           1.58518f};  // LF / LB / RB / RF
+                                           4.72677f};  // LF / LB / RB / RF
+/* RF 的 1.58518 → +π = 4.72677：现场实测，把四个舵轮手掰到「轮面朝正前方」的机械零位时，
+ *   LF -2.11°  LB -2.88°  RB +2.44°（都在 ±3°，说明考核说明给的偏移是对的），
+ *   而 RF 读到 +179.87° —— 差整整 π。判据 |θ|<0.2 rad 下这是唯一不通过的一项。
+ * 手掰左转 90° 复验：四台读数分别 +95.1° / +86.9° / +88.0° / +85.9°，方向全部正确，
+ * 所以只补 π，不动 kSteerDir。 */
 
 }  // namespace
 

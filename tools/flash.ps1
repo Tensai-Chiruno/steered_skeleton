@@ -26,6 +26,9 @@ param(
     [ValidateSet("normal", "under-reset")]
     [string]$Connect = "under-reset",
 
+    # 强制走 pyocd（J-Link 用户可显式指定，省掉 ST CLI 那次必然失败的尝试）
+    [switch]$ForcePyOcd,
+
     # 烧完做一次校验（读回比对）
     [switch]$NoVerify,
 
@@ -143,30 +146,45 @@ foreach ($b in $targets) {
 
     Write-Host "[2/3] 烧录 ($elf) ..." -ForegroundColor Cyan
 
-    if ($stcli) {
+    # 两条路线都试，谁认得到调试器就用谁：
+    #   ST-Link → 路线 A（STM32CubeProgrammer CLI）
+    #   J-Link  → 路线 A 报 "No debug probe detected"（它只认 ST-Link），自动回退路线 B
+    $tgt = "stm32f407vg"
+    $flashed = $false
+
+    if ($stcli -and -not $ForcePyOcd) {
         # 路线 A：官方 CLI
         $mode = if ($Connect -eq "under-reset") { "UR" } else { "NORMAL" }
         $args = @("-c", "port=SWD", "mode=$mode", "-w", $elf, "-rst")
         if (-not $NoVerify) { $args += "-v" }
-        & $stcli @args
-        if ($LASTEXITCODE -ne 0) {
+        $stOut = & $stcli @args 2>&1
+        $stOut | Select-Object -Last 3 | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -eq 0) {
+            $flashed = $true
+        } elseif ($stOut -match "No debug probe detected") {
+            Write-Host "  [A] STM32CubeProgrammer 认不到调试器（J-Link 不在它支持列表）→ 回退路线 B" -ForegroundColor Yellow
+        } else {
             Write-Host "  烧录失败（退出码 $LASTEXITCODE）" -ForegroundColor Red
             Write-Host "  排查：① 只接 SWD（PA13/PA14+GND+3V3）② 试 -Connect under-reset ③ 拉高 BOOT0 全片擦除" -ForegroundColor Yellow
-            $failed++; continue
         }
-        Write-Host "  烧录成功" -ForegroundColor Green
     }
-    else {
-        # 路线 B：pyocd
-        $tgt = "stm32f407vg"
+
+    if (-not $flashed -and $pyocd) {
+        # 路线 B：pyocd（ST-Link / J-Link / DAPLink 都支持）
         & python -m pyocd flash -t $tgt --format elf $elf
-        if ($LASTEXITCODE -ne 0) {
+        if ($LASTEXITCODE -eq 0) {
+            $flashed = $true
+        } else {
             Write-Host "  pyocd 烧录失败" -ForegroundColor Red
-            Write-Host "  常见原因：ST-Link 驱动不是 WinUSB（需 Zadig 替换）→ 建议改用路线 A" -ForegroundColor Yellow
-            $failed++; continue
+            Write-Host "  常见原因：ST-Link 驱动不是 WinUSB（需 Zadig）/ J-Link CE 版固件不支持本芯片" -ForegroundColor Yellow
         }
-        Write-Host "  烧录成功" -ForegroundColor Green
     }
+
+    if (-not $flashed) {
+        Write-Host "  本块板烧录失败" -ForegroundColor Red
+        $failed++; continue
+    }
+    Write-Host "  烧录成功" -ForegroundColor Green
 
     Write-Host "[3/3] 完成。上电后看 PC8 状态灯（底盘板）：常亮=全绿，1~7 闪=对应告警" -ForegroundColor DarkGray
 }
