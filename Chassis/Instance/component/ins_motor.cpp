@@ -35,6 +35,7 @@
 #include "HW_can.hpp"
 #include "assert.hpp"
 #include "can.h"
+#include "module_state.hpp"
 #include "tick.hpp"
 
 /* Private macro -------------------------------------------------------------*/
@@ -122,6 +123,9 @@ volatile uint32_t g_wheel_rx_count = 0;
  * 所以云台板永远读不到 yaw（这就是 δ 恒为 0 的根因）。
  * [0..7] = 最近一帧的 8 字节，[8] = 累计帧数低 8 位。排障完删。 */
 volatile uint8_t g_dbg_dm_yaw[9] = {0};
+/* 【调试·临时】云台 yaw 的程序化控制入口（见 ins_motor.hpp 的说明）。 */
+volatile uint32_t g_dbg_yaw_hold_enable = 0;
+volatile float g_dbg_yaw_target_delta = 0.0f;
 
 namespace {
 
@@ -172,7 +176,14 @@ void EnsureInit(void) {
    * enable_mode_switch=true：MIT 模式需要先切控制模式（写 CTRL_MODE 寄存器）。 */
   {
     hello_world::motor::OptionalParams opt;
-    opt.input_type = hello_world::motor::InputType::kRaw;  /* MIT 走 setMitInput，不经过 setInput */
+    /* 达妙 MIT 电机的 input_type 必须是 kTorq：
+     * motor_DaMiao.cpp:82 有 HW_ASSERT(input_type == kTorq)，传 kRaw 会在开机初始化时
+     * 直接进死循环（表现：tick 恒为 0、看门狗反复复位、整条链路全静默）。
+     * 实际力矩由 setMitInput() 给，这里的类型只为满足组件的域约定。 */
+    opt.input_type = hello_world::motor::InputType::kTorq;
+    /* 力矩硬限幅 1.2 N·m：这台电机是用来"摆云台"的，不是用来做高速动作的。
+     * 达妙 J4310 额定约 10 N·m，1.2 N·m 只有 1/8，任何参数错误都不会把云台打飞。 */
+    opt.max_torq_input_lim = 1.2f;
     opt.dir = kYawDir;
     opt.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf;
     opt.angle_offset = 0.0f;   /* δ 的零位等实测标定后再补 */
@@ -352,22 +363,36 @@ void MotorSendAllCommands(void) {
    * 才会持续上报反馈（实测：没人管它时复位后只发 1 帧就不再说话）。
    * 安全性：kp=kd=0、力矩前馈 0 —— 电机处于"使能但不出力"（软掉）状态，
    * 力矩输出恒为 0，不会带动云台。等 δ 标定完再单独做 yaw 力矩闭环。
-   * 使能命令限频 500 ms：达妙失能后不会自己回来，但也不能每毫秒重发（会把帧挤满）。 */
+   * 【降频到 200 Hz】达妙 200 Hz 足够，而 CAN2 上已经有 0x200（轮）1 kHz、
+   * 板间帧等；再加 1 kHz 会把 3 个发送邮箱挤满 -> HAL 返回忙/错 ->
+   * 发送失败计数上涨 -> 触发 P1-8 误急停（现场实测 life 在 2/1 之间跳）。
+   * 使能命令仍 500 ms 限频。 */
   {
+    static uint32_t div = 0;
     const uint32_t now_ms = hello_world::tick::GetTickMs();
-    if (g_yaw_enable_dirty || (now_ms - g_yaw_enable_ms) >= 500u) {
-      g_yaw_enable_dirty = false;
-      g_yaw_enable_ms = now_ms;
-      yaw_.enable();
-    }
-    yaw_.setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);   /* pos, vel, kp, kd, torq */
-    for (int i = 0; i < 8; ++i) {
-      buf[i] = 0;
-    }
-    /* 只在 encode() 成功时才发：控制模式还没确认时发 8 个 0 会被当成
-     * "位置 0、kp/kd=0" 的 MIT 帧（虽然这里本来就是全 0，但仍按规矩来）。 */
-    if (yaw_.encode(buf)) {
-      CAN_Send_Msg(kWheelBus, buf, hello_world::motor::DM_J4310::GetTxId(kYawId), 8);
+    /* 【关键】setMitInput() 自带断言：非 Working 状态不许调用（motor_DaMiao.cpp:449）。
+     * 所以整段都必须挂在 g_mit_input_allowed 上；不在 Working 时连使能帧都不发，
+     * 免得电机被使能了却收不到指令。 */
+    if (robot::g_mit_input_allowed && ((div++ % 5u) == 0u)) {
+      if (g_yaw_enable_dirty || (now_ms - g_yaw_enable_ms) >= 500u) {
+        g_yaw_enable_dirty = false;
+        g_yaw_enable_ms = now_ms;
+        yaw_.enable();
+      }
+      yaw_.setMitInput(g_dbg_yaw_hold_enable ? (g_dbg_yaw_target_delta + kYawEncoderOffsetRad) : 0.0f,
+                       0.0f,
+                       /* kp 从 0.6 提到 2.0：0.6 时被云台转动阻力顶住，
+                        * 目标 90° 只走到 52°（稳态误差 38°）。2.0 N·m/rad 下
+                        * 同样阻力只对应 ~15° 误差，且力矩限幅 1.2 N·m 仍在保护。 */
+                       g_dbg_yaw_hold_enable ? 2.0f : 0.0f,   /* kp N·m/rad */
+                       g_dbg_yaw_hold_enable ? 0.15f : 0.0f,  /* kd N·m/(rad/s) */
+                       0.0f);
+      for (int i = 0; i < 8; ++i) {
+        buf[i] = 0;
+      }
+      if (yaw_.encode(buf)) {
+        CAN_Send_Msg(kWheelBus, buf, hello_world::motor::DM_J4310::GetTxId(kYawId), 8);
+      }
     }
   }
 }

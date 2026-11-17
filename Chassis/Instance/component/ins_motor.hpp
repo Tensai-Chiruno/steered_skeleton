@@ -44,6 +44,19 @@ uint32_t MotorWheelRxCount(void);
  * 注意：它在 MIT 域，控制要用 setMitInput()，setInput() 对它无效。 */
 hello_world::motor::Motor *GetMotorYaw(void);
 
+/* 云台 yaw 编码器的零位偏移（rad）：现场把云台摆到与车体正前方对齐时读到的角度。
+ * δ（云台相对车体的夹角）= 编码器角 − 本偏移。2026-11-18 实测 85.97° = 1.50039 rad。
+ * 换机械/换电机后重标：云台摆正 -> 读 g_dbg.frame_delta 的反值，改这个常数。 */
+constexpr float kYawEncoderOffsetRad = 1.50039f;
+
+/* 【调试·临时】云台 yaw 的命令入口：直接写这两个全局量就能程序化地摆云台，
+ * 不用人用手转。最终版要删掉（或者改成正式的"云台 yaw 目标"接口）。
+ *   g_dbg_yaw_hold_enable = 0 -> 电机零力矩"软掉"，可以手转（默认，安全）
+ *   g_dbg_yaw_hold_enable = 1 -> 位置保持到 g_dbg_yaw_target_delta
+ *   g_dbg_yaw_target_delta     : 目标 δ（rad），0 = 云台指向车体正前方 */
+extern volatile uint32_t g_dbg_yaw_hold_enable;
+extern volatile float g_dbg_yaw_target_delta;
+
 /* ---------------------------------------------------------------------------
  * CAN 层的两个入口（由 src/HW_can.cpp 与 Task/component/comm_task.cpp 调用）
  *

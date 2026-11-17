@@ -65,6 +65,20 @@ void MainTaskInit(void) {
   CommTaskInit();
   HAL_IWDG_Refresh(&hiwdg);
 
+  /* 【诊断·临时】开机时扫一次达妙电机的真实 id（每档只发一帧"使能"，
+   * 不带位置/速度/力矩 -> 电机不会动）。扫完看 g_diag_mask_c1/c2 就知道：
+   *   达妙反馈 id = 电机 id + 0x10，id 1~8 的反馈是 0x11~0x18，
+   *   正好落在掩码能记录的范围（bit n = 帧 id n 出现过）。
+   * 现场用途：yaw 电机确认接在**底盘 CAN2**，但按 id=1 发指令它不说话，
+   * 需要确认它的真实 id。用完把这段删掉。 */
+  {
+    constexpr bool kYawIdScanEnable = true;
+    if (kYawIdScanEnable) {
+      MotorDiagSweepEnable();
+      HAL_IWDG_Refresh(&hiwdg);
+    }
+  }
+
   /* TODO【第 3 项】: IMU 零漂采集（须在电机使能之后、状态机之前） */
   /* TODO【第 6 项】: 把各模块注册进 Robot */
   /* ---- 状态机与运动模块接线（遥控在线判定 + 生命状态机） ---- */

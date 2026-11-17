@@ -19,6 +19,7 @@
 
 #include "HW_can.hpp"
 #include "ins_comm_state.hpp"
+#include "ins_motor.hpp"
 #include "rc_relay.hpp"
 #include "tick.hpp"
 
@@ -43,6 +44,26 @@ volatile uint32_t g_dbg_rc[6] = {0u, 0u, 0u, 0u, 0u, 0u};
 
 volatile uint8_t g_dbg_dead_reason = 0xFFu;
 volatile uint32_t g_dbg_dead_count = 0u;
+/* 【诊断·临时】本拍算出来的 δ（rad），用于标定云台 yaw 的零位与符号。 */
+volatile float g_dbg_yaw_rad = 0.0f;
+/* 【调试·临时】底盘速度注入：写这几个变量就能程序化地"推杆"，不用人操作。
+ *   g_dbg_drive_inject = 1 时，用注入值代替遥控值（仅台架/自检用，提交前删）。
+ *   单位与遥控一致：vx/vy = m/s，w = rad/s。仍然要满足状态机在 Working。 */
+volatile uint32_t g_dbg_drive_inject = 0;
+volatile float g_dbg_inject_vx = 0.0f;
+volatile float g_dbg_inject_vy = 0.0f;
+volatile float g_dbg_inject_w = 0.0f;
+/* 【调试·临时】模拟遥控：g_dbg_rc_sim=1 时用下面这些值代替真实遥控输入。
+ * 用途：现场遥控器关掉后，由调试器（我）程序化地给摇杆/拨杆，继续验证功能。
+ * 安全：默认 0；即使打开，状态机、急停白名单、反馈丢失保护、看门狗全部照常生效。
+ *   lv/lh/rv/rh ∈ [-1,1]，s1/s2 ∈ {1,2,3}（1=上 2=下 3=中） */
+volatile uint32_t g_dbg_rc_sim = 0;
+volatile float g_dbg_sim_lv = 0.0f;
+volatile float g_dbg_sim_lh = 0.0f;
+volatile float g_dbg_sim_rv = 0.0f;
+volatile float g_dbg_sim_rh = 0.0f;
+volatile uint32_t g_dbg_sim_s1 = 3;
+volatile uint32_t g_dbg_sim_s2 = 1;
 
 /* 摇杆原始值域实测可能是 ±1.55（P1-11），在这里统一夹到 ±1，
  * 保证「满舵 = 设计车速」这件事与 DT7 的实际量程无关。 */
@@ -81,7 +102,7 @@ void Robot::updateRemote(void) {
   const bool local_online = IsRemoteOnline();
   const bool relay_online = robot::RcRelayFresh() && (robot::g_rc_relay.online != 0u);
   rc_from_relay_ = (!local_online && relay_online);
-  rc_online_ = local_online || relay_online;
+  rc_online_ = local_online || relay_online || (g_dbg_rc_sim != 0u);   /* 模拟遥控也算在线 */
 
   // 遥控离线 = 收到过合法帧 且 最近有更新（见 ins_comm_state.cpp）。
   if (!rc_online_ || (rc_ == nullptr && !rc_from_relay_)) {
@@ -158,12 +179,34 @@ void Robot::updateRemote(void) {
    * 对端离线时 δ 不可信，保持 0（此时也已急停，车不会动）。 */
   // 默认 δ = 0（等价于"云台与车头同向"），对端离线时保持这个安全缺省。
   float delta = 0.0f;
-  if (!peer_offline_ && comm_ != nullptr) {
-    // 直接取云台发布的相对角，**不减去本板 IMU 的 yaw**（见上方参考系说明）。
-    delta = comm_->remote().yaw;
-    // 回绕到 [-π, π)：进三角函数前必须归一化，否则 359°→1° 会反向大转。
-    delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
+  /* 【2026-11-18 打通 δ】云台 yaw 由**底盘自己**读：那台达妙电机物理上接在底盘 CAN2
+   * （id=1、反馈 0x11），云台板那条 CAN1 上没有任何低 ID 帧，所以云台板发布的 yaw 恒为 0
+   * —— 这才是"δ 恒为 0、跟随模式形同虚设"的真正原因，不是算法问题。
+   * 现在由底盘直接取它的编码器角当 δ；只有在这台电机不可用时才回落到对端发布的 yaw。 */
+  {
+    auto *yaw_m = GetMotorYaw();
+    if (yaw_m != nullptr && robot::g_mit_input_allowed) {
+      /* 减掉零位偏移：现场把云台摆到与车体正前方对齐时，编码器读到 85.97°
+       * （1.50039 rad），所以 δ = 编码器角 − 该偏移。
+       * 标定方法写在这里，换机械/换电机后照做一次即可：
+       *   ① 把云台目视摆正朝前  ② 读 g_dbg.frame_delta  ③ 把这个常数改成读到的值。 */
+      constexpr float kYawDeltaOffset = 1.50039f;
+      delta = yaw_m->angle() - kYawDeltaOffset;
+    } else if (!peer_offline_ && comm_ != nullptr) {
+      delta = comm_->remote().yaw;
+    }
   }
+  /* 回绕到 [-π, π)。
+   * 注意：不能写成 fmod(x + π, 2π) - π —— std::fmod 对负数返回负值，
+   * 于是负角度会被"绕"到 -292° 这种越界值（现场实测 δ 恒 −292.86° 就是这么来的，
+   * 之前 δ 恒为 0 所以这个 bug 一直没暴露）。必须先归到 [0, 2π) 再减 π。 */
+  delta = std::fmod(delta + 3.14159265f, 6.28318531f);
+  if (delta < 0.0f) {
+    delta += 6.28318531f;
+  }
+  delta -= 3.14159265f;
+  /* 【诊断·临时】把算出来的 δ 单独暴露出来，便于现场标定零位与符号。 */
+  g_dbg_yaw_rad = delta;
   /* 【已删除：δ 符号"拨轮翻号"调试开关】
    * 原来这里写 `if (rc_wheel() < -0.7f) delta = -delta;`，用拨轮临时给 δ 翻号。
    * 2026-11-18 起拨轮被正式分配给「分离模式自转」，不能再当调试开关；
@@ -173,9 +216,14 @@ void Robot::updateRemote(void) {
    *   车头上电、云台指向车身左侧、推前进 -> 车应向左横移；
    * 若反了，把 delta 的赋值改成 -comm_->remote().yaw 并记录在现场调试记录里。 */
 
-  yaw_error_ = delta;                       /* 跟随模式用 */
+  yaw_error_ = delta;                       /* 跟随模式用：正的 δ 需要车体逆时针追 */
   if (chassis_ != nullptr) {
-    chassis_->setFrameDelta(delta);          /* 前进方向变换用 */
+    /* 【符号定标 · 2026-11-18 实测】云台指向车体左侧时 δ = +89.2°，
+     * 而逆解器 gimbalToChassis() 用的是"顺时针为正"的约定，
+     * 直接传 +δ 会让车往**云台的反方向**走（实测舵角 −89° = 往右，推前进却向右）。
+     * 所以喂给解算器的一律取 −δ。判据（考核第 6 项）：
+     *   云台左转 90°、推前进 -> 四个舵角目标应为 **+90°**（左），不是 −90°。 */
+    chassis_->setFrameDelta(-delta);          /* 前进方向变换用（解算器约定） */
   }
 }
 
@@ -264,6 +312,15 @@ void Robot::updateMotion(void) {
   if (rc_ == nullptr && !rc_from_relay_) return;
   if (ctrl_source_ != CtrlSource::kRemote) return;
 
+  /* 【调试·临时】注入优先：我在调试器里写 g_dbg_inject_* 就能代替推杆。
+   * 仍然要满足上面三道门（Working + 遥控在线），所以不会绕过安全逻辑。 */
+  if (g_dbg_drive_inject) {
+    motion_.vx = g_dbg_inject_vx;
+    motion_.vy = g_dbg_inject_vy;
+    motion_.w = g_dbg_inject_w;
+    return;
+  }
+
   /* 平移：**通道分配 2026-11-18 现场重排，一根杆只管一件事**。
    * 起因：原来底盘用 lv 当"前后"、rh 当"自转"，而云台板正在用 lv 当 pitch、
    * rh 当 yaw —— 同一根杆被两处抢用（用户现场指出）。
@@ -323,6 +380,12 @@ void Robot::update(void) {
   //   updateMotion    → 依赖 life_state（非 Working 直接给 0）与 mode_
   updateRemote();
 
+  /* 达妙 MIT 输入的允许位（module_state.hpp 里的全局）。
+   * motor_DaMiao.cpp 的 setMitInput() 有断言：非 Working 调用直接死循环。
+   * 底盘这边只有云台 yaw 一台达妙电机，所以这条就是"Working 才给 MIT"。
+   * 【现场教训】这个标志以前在底盘里**从来没被置 true 过**，一旦有人调用
+   * setMitInput() 就会开机死循环（tick 恒 0、看门狗反复复位、整条链路静默）。 */
+
   /* "不安全"三条件的确认去抖（见 robot.hpp 里的说明）。
    * 一帧噪声不该把 Working 打回 Dead 再走一遍自检；真实故障会持续存在，100 ms 内必然被确认。 */
   {
@@ -343,6 +406,10 @@ void Robot::update(void) {
   }
 
   updateLifeState(now);
+  /* 达妙 MIT 允许位必须在 updateLifeState 之后算：它要反映**本拍**的状态。
+   * 这条原来在底盘里从来没被置 true 过（只在断言里用），一旦有人调用
+   * setMitInput() 就开机死循环。现在由状态机统一维护。 */
+  robot::g_mit_input_allowed = (life_state_ == LifeState::kWorking);
   updateMode();
   updateMotion();
 
@@ -389,7 +456,13 @@ bool Robot::UseRelay(void) const {
   return robot::RcRelayFresh() && (robot::g_rc_relay.online != 0u);
 }
 
+/* 【调试·临时】模拟遥控是否生效。 */
+bool Robot::UseSim(void) const { return g_dbg_rc_sim != 0u; }
+
 hello_world::remote_control::SwitchState Robot::LeftSwitch(void) const {
+  if (UseSim()) {
+    return static_cast<hello_world::remote_control::SwitchState>(g_dbg_sim_s1);
+  }
   if (UseRelay()) {
     return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s1);
   }
@@ -400,6 +473,9 @@ hello_world::remote_control::SwitchState Robot::LeftSwitch(void) const {
 }
 
 hello_world::remote_control::SwitchState Robot::RightSwitch(void) const {
+  if (UseSim()) {
+    return static_cast<hello_world::remote_control::SwitchState>(g_dbg_sim_s2);
+  }
   if (UseRelay()) {
     return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s2);
   }
@@ -410,21 +486,25 @@ hello_world::remote_control::SwitchState Robot::RightSwitch(void) const {
 }
 
 float Robot::StickLv(void) const {
+  if (UseSim()) return g_dbg_sim_lv;
   if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.lv);
   return (rc_ != nullptr) ? rc_->rc_lv() : 0.0f;
 }
 
 float Robot::StickLh(void) const {
+  if (UseSim()) return g_dbg_sim_lh;
   if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.lh);
   return (rc_ != nullptr) ? rc_->rc_lh() : 0.0f;
 }
 
 float Robot::StickRh(void) const {
+  if (UseSim()) return g_dbg_sim_rh;
   if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.rh);
   return (rc_ != nullptr) ? rc_->rc_rh() : 0.0f;
 }
 
 float Robot::StickRv(void) const {
+  if (UseSim()) return g_dbg_sim_rv;
   if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.rv);
   return (rc_ != nullptr) ? rc_->rc_rv() : 0.0f;
 }

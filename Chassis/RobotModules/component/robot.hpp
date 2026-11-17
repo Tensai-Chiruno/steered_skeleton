@@ -45,7 +45,7 @@ class Robot {
     float max_vy = 2.0f;                 ///< m/s
     float max_w_manual = 6.0f;           ///< rad/s，遥控器手动自转
     float gyro_w = 2.0f;                 ///< 小陀螺常值 rad/s（2026-11-18 底盘验证后放开，原 0 是台架保护）
-    float follow_kp = 2.0f;              ///< 跟随 δ->w 增益（δ 通了才有效；w 有 ±max_w_manual 限幅）
+    float follow_kp = 1.0f;              ///< 跟随 δ->w 增益：δ 越大自转越快，w 限幅 ±max_w_manual
     float remote_deadband = 0.02f;       ///< 摇杆死区（归一化）
   };
 
@@ -95,6 +95,8 @@ class Robot {
   /** 本拍遥控是否取自云台转发帧（新鲜 + 校验过 + online=1）。
    *  承载优先级：转发 > 本地 DBUS。见 robot.cpp 里的说明。 */
   bool UseRelay(void) const;
+  /** 【调试·临时】模拟遥控是否生效（g_dbg_rc_sim != 0）。 */
+  bool UseSim(void) const;
   bool rc_from_relay_ = false;   ///< 本拍遥控是否来自转发（诊断用，不参与判据）
 
   static float Deadband(float v, float db);
