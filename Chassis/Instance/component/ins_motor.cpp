@@ -106,6 +106,11 @@ constexpr float kSteerOffset[kSteerNum] = {2.61346f, -2.06844f, 0.00729f,
 volatile uint32_t g_steer_rx_count = 0;
 /* 轮电机（M3508，CAN2）反馈帧累计计数，用途同上（区分"没指令"和"没反馈"）。 */
 volatile uint32_t g_wheel_rx_count = 0;
+/* 【诊断·临时】达妙 yaw 电机（CAN2 上 id=1 -> 反馈 0x11）的原始反馈帧。
+ * 为什么在底盘这边抓：实测该电机挂在**底盘 CAN2**，云台板那条总线上什么都没有，
+ * 所以云台板永远读不到 yaw（这就是 δ 恒为 0 的根因）。
+ * [0..7] = 最近一帧的 8 字节，[8] = 累计帧数低 8 位。排障完删。 */
+volatile uint8_t g_dbg_dm_yaw[9] = {0};
 
 namespace {
 
@@ -229,6 +234,14 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
     } else if (hcan == kSteerBus) {
       g_diag_mask_c1 |= (1UL << std_id);
     }
+  }
+
+  /* 【诊断·临时】抓达妙 yaw 电机（反馈 0x11）的原始帧，用来确认帧格式与角度换算。 */
+  if (std_id == 0x11u) {
+    for (int i = 0; i < 8; ++i) {
+      g_dbg_dm_yaw[i] = data[i];
+    }
+    g_dbg_dm_yaw[8] = static_cast<uint8_t>(g_dbg_dm_yaw[8] + 1u);
   }
 
   hello_world::motor::Motor *m = LocateMotor(hcan, std_id);
