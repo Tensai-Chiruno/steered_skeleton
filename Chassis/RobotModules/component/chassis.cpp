@@ -359,6 +359,14 @@ void Chassis::update(void) {
       (void)pid;   /* 保留对象实例，避免影响其他地方对 PID 的访问 */
       vel_meas = (steer != nullptr) ? steer->vel() : 0.0f;
       steer_raw = params_.steer_kp * err - params_.steer_kd * vel_meas;
+      /* 【安全】硬刹车：角速度超过阈值就不看目标，直接反向满电流。
+       * 为什么需要：电流上限只有 0.8 A（27% 满量程），而阻尼项在高速时需要的
+       * 电流远超上限，纯 PD 在"舵轮空载飞转"这种工况下刹不住 ——
+       * 现场实测会出现越转越快、绕着 ±180° 转圈（2026-11-18）。
+       * 这一条与增益无关，所以即使参数配错也不会失控。 */
+      if (std::fabs(vel_meas) > params_.steer_vel_hard_limit) {
+        steer_raw = (vel_meas > 0.0f) ? -params_.steer_curr_limit : params_.steer_curr_limit;
+      }
     }
     if (err < params_.steer_deadband && err > -params_.steer_deadband) {
       /* 死区内不切断输出，而是保持上一拍的值：
@@ -412,6 +420,12 @@ void Chassis::update(void) {
     if (pidw != nullptr) {
       // 反馈是 wheel->vel()：M3508 输出端角速度（已除过 14 的减速比），
       // 与目标同域，所以这里同样是"直接相减"。
+      /* 目标为 0（松杆）时先清积分：加速阶段积满的 I 会在松杆后继续推，
+       * 实测松杆后 LF 仍有 0.7~1.9 rad/s 的爬行（指令 +155 raw 全是积分项）。
+       * 清掉后这一拍只剩 P 项，立刻变成刹车。正常调速时不清，保留消静差能力。 */
+      if (std::fabs(wheel_vel_target) < 0.1f) {
+        pidw->reset();
+      }
       wheel_raw = pidw->update(wheel_vel_target, wheel->vel(), kDt);
     }
     // raw 域限幅（轮电机是 kRaw！不是安培；M3508 满量程 16384，默认 3000 ≈ 3.7 A）。

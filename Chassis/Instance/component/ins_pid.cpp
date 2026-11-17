@@ -49,8 +49,8 @@ void EnsureInit(void) {
     p.ki = 20.0f;    /* 轮子无重力负载，可以用 I 消静差 */
     p.kd = 0.0f;
     /* integral_limit 的单位是「误差×秒」，不是输出单位（P2-5）。
-     * 这里给 2.0，配合 ki 才有意义；整定时按 ki 反算出想要的输出上限。 */
-    p.integral_limit = 100.0f;
+     * 联调期压到 20：轮子被限幅卡住时不让积分越积越大，松杆时不至于冲一下。 */
+    p.integral_limit = 20.0f;
     p.output_limit = kWheelOutLimitRaw;
     p.diff_on_measurement = true;
     p.angle_wrap = false;   /* 速度环不回绕 */

@@ -286,10 +286,16 @@ void Robot::updateMotion(void) {
        * 云台板更新后 StepWheel() 会给出真实值，这一行不用再改。 */
       motion_.w = Deadband(ClampNorm(StickWheel()), params_.remote_deadband) * params_.max_w_manual;
       break;
-    case ChassisMode::kFollow:
-      /* δ 由双板帧喂入；未接入前 δ 恒 0 → w 恒 0（安全缺省②）。 */
-      motion_.w = params_.follow_kp * yaw_error_;
+    case ChassisMode::kFollow: {
+      /* δ 由双板帧喂入；δ 恒 0 时 w 恒 0（安全缺省）。
+       * 限幅用 max_w_manual：δ 一旦接上，±π 的误差乘 kp 会给出很大的 w，
+       * 这里必须夹住，否则"跟随"会变成突然自旋。 */
+      float w_follow = params_.follow_kp * yaw_error_;
+      if (w_follow > params_.max_w_manual) w_follow = params_.max_w_manual;
+      if (w_follow < -params_.max_w_manual) w_follow = -params_.max_w_manual;
+      motion_.w = w_follow;
       break;
+    }
     case ChassisMode::kGyro:
       motion_.w = params_.gyro_w;
       break;

@@ -44,8 +44,8 @@ class Robot {
     float max_vx = 2.0f;                 ///< m/s
     float max_vy = 2.0f;                 ///< m/s
     float max_w_manual = 6.0f;           ///< rad/s，遥控器手动自转
-    float gyro_w = 0.0f;                 ///< 小陀螺常值；台架第一次上电必须为 0（P2-13）
-    float follow_kp = 0.0f;              ///< 跟随 δ->w 增益；接线前必须为 0（P2-13）
+    float gyro_w = 2.0f;                 ///< 小陀螺常值 rad/s（2026-11-18 底盘验证后放开，原 0 是台架保护）
+    float follow_kp = 2.0f;              ///< 跟随 δ->w 增益（δ 通了才有效；w 有 ±max_w_manual 限幅）
     float remote_deadband = 0.02f;       ///< 摇杆死区（归一化）
   };
 
