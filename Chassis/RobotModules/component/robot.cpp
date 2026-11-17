@@ -34,6 +34,16 @@ float Robot::Deadband(float v, float db) {
   return (v > -db && v < db) ? 0.0f : v;
 }
 
+/* 【诊断·临时】最近一次"不安全"的原因与累计进 Dead 次数。用 J-Link 直接读符号。
+ * 0 = 遥控离线, 1 = 急停(左拨杆), 2 = IMU 未就绪, 0xFF = 从未发生。排障完删。 */
+/* 【诊断·临时】急停来源探针：一次读清"到底是谁把 estop 拉起来的"。
+ * [0] UseRelay()  [1] LeftSwitch 原始编码  [2] RightSwitch 原始编码  [3] tx_fail_streak_
+ * [4] g_tx_fail_count 是否在涨(1/0)  [5] estop_ 最终值  排障完删。 */
+volatile uint32_t g_dbg_rc[6] = {0u, 0u, 0u, 0u, 0u, 0u};
+
+volatile uint8_t g_dbg_dead_reason = 0xFFu;
+volatile uint32_t g_dbg_dead_count = 0u;
+
 /* 摇杆原始值域实测可能是 ±1.55（P1-11），在这里统一夹到 ±1，
  * 保证「满舵 = 设计车速」这件事与 DT7 的实际量程无关。 */
 float Robot::ClampNorm(float v) {
@@ -99,10 +109,12 @@ void Robot::updateRemote(void) {
 
   /* P1-8①：CAN 发送持续失败 = 对端在、但发不出去（bus-off / 邮箱被重传占满）。
    * 只在对端"在线"时才判：单板台架没有 ACK，发送失败是常态，不能因此刹车。 */
+  uint32_t growing = 0u;   /* 【诊断·临时】本拍发送失败计数是否在涨 */
   {
     // 用"计数是否在涨"来判断，而不是直接看单次返回值：
     // 单次失败可能只是邮箱短暂满，连续 20 ms 都在涨才说明总线真出问题。
     const uint32_t fail_now = CAN_GetTxFailCount();
+    growing = (fail_now != last_tx_fail_) ? 1u : 0u;
     if (fail_now != last_tx_fail_) {
       last_tx_fail_ = fail_now;
       ++tx_fail_streak_;                 // 这一拍又失败了一次
@@ -117,6 +129,14 @@ void Robot::updateRemote(void) {
 
   /* IMU 就绪（P1-2）：未注册、标定未完成、SPI 读失败都不许进 Working。 */
   imu_ready_ = (imu_ != nullptr) && imu_->isReady() && imu_->isOk();
+
+  /* 【诊断·临时】把急停的四个来源一起暴露出来。 */
+  g_dbg_rc[0] = UseRelay() ? 1u : 0u;
+  g_dbg_rc[1] = static_cast<uint32_t>(LeftSwitch());
+  g_dbg_rc[2] = static_cast<uint32_t>(RightSwitch());
+  g_dbg_rc[3] = tx_fail_streak_;
+  g_dbg_rc[4] = growing;
+  g_dbg_rc[5] = estop_ ? 1u : 0u;
 
   /* 第 6 项：δ = 云台相对**车体**的夹角。
    *
@@ -144,13 +164,15 @@ void Robot::updateRemote(void) {
     // 回绕到 [-π, π)：进三角函数前必须归一化，否则 359°→1° 会反向大转。
     delta = std::fmod(delta + 3.14159265f, 6.28318531f) - 3.14159265f;
   }
-  /* 【调试】现场翻号开关（不属于考核功能，提交前应固定符号并删除本段）
-   * 现场翻号，不用改代码、不用重烧：把**拨轮**压到最左（全工程只有它在写、无消费者），
-   * δ 取反。两个拨杆都被占满了（左=急停白名单，右=模式 Up/Mid/Down），所以用拨轮。
-   * 符号本身要靠实车判定：车头上电、云台指车身左侧、推前进 → 应向左横移。 */
-  if (rc_ != nullptr && rc_->rc_wheel() < -0.7f) {
-    delta = -delta;
-  }
+  /* 【已删除：δ 符号"拨轮翻号"调试开关】
+   * 原来这里写 `if (rc_wheel() < -0.7f) delta = -delta;`，用拨轮临时给 δ 翻号。
+   * 2026-11-18 起拨轮被正式分配给「分离模式自转」，不能再当调试开关；
+   * 而且交接文档要求提交前把符号写死。
+   * δ 的符号**目前无法用实车验证**（云台发布的 yaw 恒为 0，见下），
+   * 所以先写死为「不取反」；等 yaw 通了，按 交接文档 的方法验证一次：
+   *   车头上电、云台指向车身左侧、推前进 -> 车应向左横移；
+   * 若反了，把 delta 的赋值改成 -comm_->remote().yaw 并记录在现场调试记录里。 */
+
   yaw_error_ = delta;                       /* 跟随模式用 */
   if (chassis_ != nullptr) {
     chassis_->setFrameDelta(delta);          /* 前进方向变换用 */
@@ -160,6 +182,9 @@ void Robot::updateRemote(void) {
 void Robot::enterDead(void) {
   // 进入顺序有讲究：先改状态 → 清运动指令 → 再让底盘失能并清零。
   // 若先清零再改状态，中间这一拍 chassis_->update() 可能用旧 target 输出一次。
+  if (life_state_ != LifeState::kDead) {
+    ++g_dbg_dead_count;   /* 【诊断·临时】统计"真的从别的状态掉进 Dead"的次数 */
+  }
   life_state_ = LifeState::kDead;
   motion_.reset();
   if (chassis_ != nullptr) {
@@ -200,7 +225,7 @@ void Robot::updateLifeState(uint32_t now) {
 
     case LifeState::kResurrection:
       // 自检期间任何一道安全门破了，立刻退回 Dead（不是留在自检里）。
-      if (!rc_online_ || estop_) { enterDead(); break; }
+      if (unsafe_confirmed_) { enterDead(); break; }
       /* 两道条件同时满足才准进 Working：计时到了 且 IMU 真的就绪 */
       // 为什么还要计时：电机使能后舵角回中需要时间，IMU 也需要静置才能标零漂。
       // 为什么还要 imu_ready_：计时只是"等够久"，不代表标定真的成功（可能超时降级）。
@@ -211,8 +236,9 @@ void Robot::updateLifeState(uint32_t now) {
 
     case LifeState::kWorking:
       // Working 是最危险的状态，所以退出条件最多：遥控掉、急停、IMU 失效，
-      // 任意一条成立都立刻退回 Dead 并把输出清零。
-      if (!rc_online_ || estop_ || !imu_ready_) enterDead();
+      // 任意一条**持续**成立（kUnsafeConfirmMs）就退回 Dead 并把输出清零。
+      // 注意：输出的清零不看这个去抖 —— 见 update() 里 setEnabled 用的是 unsafe_active_。
+      if (unsafe_confirmed_) enterDead();
       break;
 
     default:
@@ -238,15 +264,27 @@ void Robot::updateMotion(void) {
   if (rc_ == nullptr && !rc_from_relay_) return;
   if (ctrl_source_ != CtrlSource::kRemote) return;
 
-  // 平移：左摇杆竖 → vx（推前为正），左摇杆横 → vy。
-  // 注意这里的 (vx, vy) 是**云台坐标系**，旋转到车体系由 Chassis 负责（考核 3.2）。
-  // 三步处理：先夹到 ±1（吸收 DT7 实际量程差异）→ 过死区 → 乘上限。
-  motion_.vx = Deadband(ClampNorm(StickLv()), params_.remote_deadband) * params_.max_vx;
-  motion_.vy = Deadband(ClampNorm(StickLh()), params_.remote_deadband) * params_.max_vy;
+  /* 平移：**通道分配 2026-11-18 现场重排，一根杆只管一件事**。
+   * 起因：原来底盘用 lv 当"前后"、rh 当"自转"，而云台板正在用 lv 当 pitch、
+   * rh 当 yaw —— 同一根杆被两处抢用（用户现场指出）。
+   * 最终分配（已确认）：
+   *   云台 pitch <- 左杆竖直 lv（Gimbal/robot.cpp，底盘不碰）
+   *   云台 yaw   <- 左杆水平 lh（云台板，待其固件更新）
+   *   底盘 vx    <- 右杆竖直 rv（推前为正）
+   *   底盘 vy    <- 右杆水平 rh（推右为正）
+   *   底盘 w     <- 拨轮（仅分离模式用，不占摇杆）
+   * 于是：左手一根杆 = 云台，右手一根杆 = 车，互不干扰。
+   * 注意 (vx, vy) 的坐标系由 Chassis 按模式决定是否乘 δ（分离=车体，跟随/小陀螺=云台）。
+   * 三步处理：先夹到 ±1（吸收 DT7 实际量程差异）→ 过死区 → 乘上限。 */
+  motion_.vx = Deadband(ClampNorm(StickRv()), params_.remote_deadband) * params_.max_vx;
+  motion_.vy = Deadband(ClampNorm(StickRh()), params_.remote_deadband) * params_.max_vy;
 
   switch (mode_) {
     case ChassisMode::kDepart:
-      motion_.w = Deadband(ClampNorm(StickRh()), params_.remote_deadband) * params_.max_w_manual;
+      /* 分离模式：原地自转由**拨轮**控制（不占摇杆通道）。
+       * 拨轮还没进 0x212 转发帧（8 字节已满），因此现在恒为 0；
+       * 云台板更新后 StepWheel() 会给出真实值，这一行不用再改。 */
+      motion_.w = Deadband(ClampNorm(StickWheel()), params_.remote_deadband) * params_.max_w_manual;
       break;
     case ChassisMode::kFollow:
       /* δ 由双板帧喂入；未接入前 δ 恒 0 → w 恒 0（安全缺省②）。 */
@@ -278,6 +316,26 @@ void Robot::update(void) {
   //   updateMode      → 读右拨杆，决定 w 的来源
   //   updateMotion    → 依赖 life_state（非 Working 直接给 0）与 mode_
   updateRemote();
+
+  /* "不安全"三条件的确认去抖（见 robot.hpp 里的说明）。
+   * 一帧噪声不该把 Working 打回 Dead 再走一遍自检；真实故障会持续存在，100 ms 内必然被确认。 */
+  {
+    const bool unsafe_raw = (!rc_online_) || estop_ || (!imu_ready_);
+    if (unsafe_raw) {
+      if (!unsafe_active_) {
+        unsafe_active_ = true;
+        unsafe_since_ms_ = now;
+        /* 记录"第一次出现不安全"时到底是哪一条（0=遥控离线 1=急停 2=IMU未就绪），
+         * 供现场用 J-Link 直接读，省掉反复猜。 */
+        g_dbg_dead_reason = static_cast<uint8_t>((!rc_online_) ? 0u : (estop_ ? 1u : 2u));
+      }
+      unsafe_confirmed_ = (now - unsafe_since_ms_) >= kUnsafeConfirmMs;
+    } else {
+      unsafe_active_ = false;
+      unsafe_confirmed_ = false;
+    }
+  }
+
   updateLifeState(now);
   updateMode();
   updateMotion();
@@ -288,7 +346,13 @@ void Robot::update(void) {
     //   setEnabled → 只有 Working 才允许输出（false 会立刻清 0）
     //   update()   → 限幅 → δ 变换 → 逆解 → 8 个 PID → setInput
     chassis_->setTarget(motion_);
-    chassis_->setEnabled(life_state_ == LifeState::kWorking);
+    /* 平移方向的参考系按模式走（考核第 6 项）：分离=车头系，跟随/小陀螺=云台系。
+     * 以前这个是常量 true（三种模式都在云台系），分离模式形同虚设。 */
+    chassis_->setRotateByDelta(mode_ != ChassisMode::kDepart);
+    /* 使能条件比"状态机进 Working"更严一层：**任何一帧**不安全（遥控掉/急停/IMU 失）都立刻不使能，
+     * 输出当拍归零 —— 安全动作零延迟。而"掉回 Dead、重走一遍自检"要看持续 100 ms，
+     * 避免一帧抖动就让车停一秒（见 updateRemote 后面的去抖）。 */
+    chassis_->setEnabled(life_state_ == LifeState::kWorking && !unsafe_active_);
     chassis_->update();
   }
 
@@ -305,9 +369,22 @@ void Robot::update(void) {
   }
 }
 
-/* ---- 遥控来源访问器（本地 DBUS / 云台转发） ------------------------------- */
+/* ---- 遥控来源访问器（本地 DBUS / 云台转发） -------------------------------
+ * 【2026-11-18 现场修复】原来的判据是"本地离线才用转发"（rc_from_relay_），
+ * 结果出现一个致命组合：本板 DBUS 物理上是断开的，却报告"在线"
+ * （本地对象被别的路径写活了/超时判据没触发），于是：
+ *   左拨杆去读**本地的假数据** -> 拨杆值 0 -> 不在白名单 -> 急停恒为 1
+ *   现象：遥控在线=1、对端在线=1、IMU ready=1、拨杆实际在合法档位，
+ *         但状态机永远停在 Dead，且 dead_reason=1（急停）。
+ * 现在改成：**只要转发数据新鲜（300 ms 内 + 校验通过 + online=1）就优先用转发**，
+ * 本地 DBUS 只在没有转发时才用。这台车的接收机只接在云台板，所以这条更符合事实，
+ * 而且转发帧自带 XOR 校验与超时，失效时自然回落到本地/急停，安全性不降低。 */
+bool Robot::UseRelay(void) const {
+  return robot::RcRelayFresh() && (robot::g_rc_relay.online != 0u);
+}
+
 hello_world::remote_control::SwitchState Robot::LeftSwitch(void) const {
-  if (rc_from_relay_) {
+  if (UseRelay()) {
     return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s1);
   }
   if (rc_ != nullptr) {
@@ -317,7 +394,7 @@ hello_world::remote_control::SwitchState Robot::LeftSwitch(void) const {
 }
 
 hello_world::remote_control::SwitchState Robot::RightSwitch(void) const {
-  if (rc_from_relay_) {
+  if (UseRelay()) {
     return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s2);
   }
   if (rc_ != nullptr) {
@@ -327,18 +404,35 @@ hello_world::remote_control::SwitchState Robot::RightSwitch(void) const {
 }
 
 float Robot::StickLv(void) const {
-  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.lv);
+  if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.lv);
   return (rc_ != nullptr) ? rc_->rc_lv() : 0.0f;
 }
 
 float Robot::StickLh(void) const {
-  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.lh);
+  if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.lh);
   return (rc_ != nullptr) ? rc_->rc_lh() : 0.0f;
 }
 
 float Robot::StickRh(void) const {
-  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.rh);
+  if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.rh);
   return (rc_ != nullptr) ? rc_->rc_rh() : 0.0f;
+}
+
+float Robot::StickRv(void) const {
+  if (UseRelay()) return robot::DequantizeStick(robot::g_rc_relay.rv);
+  return (rc_ != nullptr) ? rc_->rc_rv() : 0.0f;
+}
+
+float Robot::StickWheel(void) const {
+  /* 拨轮（分离模式的原地自转）。
+   * 现状：0x212 转发帧 8 字节已经排满（头/online+seq/四摇杆/两拨杆/校验），
+   * 拨轮塞不进去，所以**经转发路径时恒为 0** —— 即分离模式暂时没有手动自转，
+   * 小陀螺模式的自转不受影响。等云台板固件更新（缩 s1/s2 到低位、拨轮占 4 bit，
+   * 或新增一帧 0x213）后，把这里改成
+   *   return robot::DequantizeStick(robot::g_rc_relay.wheel);
+   * 即可，控制逻辑不用动。本地 DBUS（若以后接收机接到底盘）直接可用。 */
+  if (UseRelay()) return 0.0f;
+  return (rc_ != nullptr) ? rc_->rc_wheel() : 0.0f;
 }
 
 }  // namespace robot

@@ -83,10 +83,19 @@ class Robot {
    * 下面这几个访问器把"从哪来"的差异收在一处，控制逻辑不用到处写 if。 */
   hello_world::remote_control::SwitchState LeftSwitch(void) const;
   hello_world::remote_control::SwitchState RightSwitch(void) const;
+  /* 摇杆通道（分配见 robot.cpp updateMotion 里的说明）：
+   *   lv = 云台 pitch（底盘不用）, lh = 云台 yaw（底盘不用）
+   *   rv = 底盘 vx, rh = 底盘 vy, wheel = 分离模式自转
+   * 这里保留 lv/lh 的访问器只是为了调试读数时不绕路。 */
   float StickLv(void) const;
   float StickLh(void) const;
+  float StickRv(void) const;
   float StickRh(void) const;
-  bool rc_from_relay_ = false;   ///< 本拍遥控是否来自转发
+  float StickWheel(void) const;
+  /** 本拍遥控是否取自云台转发帧（新鲜 + 校验过 + online=1）。
+   *  承载优先级：转发 > 本地 DBUS。见 robot.cpp 里的说明。 */
+  bool UseRelay(void) const;
+  bool rc_from_relay_ = false;   ///< 本拍遥控是否来自转发（诊断用，不参与判据）
 
   static float Deadband(float v, float db);
   static float ClampNorm(float v);
@@ -110,6 +119,15 @@ class Robot {
   uint32_t last_tx_fail_ = 0;
   uint32_t tx_fail_streak_ = 0;
   uint32_t resurrection_start_ms_ = 0;
+  /* 【现场修复 2026-11-18】"不安全"信号的确认去抖。
+   * 现场现象：拨模式拨杆（右）时，状态机会 2(Working)->1(自检)->2 跳一次，
+   * 也就是中间进过一帧 Dead —— 只要某一帧 estop / rc_online / imu_ready 抖一下，
+   * 就会莫名其妙停约 1 秒。真实故障会持续存在，所以用"持续 unsafe_confirm_ms 才认"，
+   * 既不会漏掉真急停（100 ms 远快于 200 ms 看门狗），也不会被一帧噪声打断。 */
+  static constexpr uint32_t kUnsafeConfirmMs = 100u;
+  bool unsafe_active_ = false;
+  uint32_t unsafe_since_ms_ = 0;
+  bool unsafe_confirmed_ = false;
   bool inited_ = false;
 };
 

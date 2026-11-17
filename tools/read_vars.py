@@ -55,15 +55,20 @@ def elf_path(board):
 def symbol_addr(nm, elf, name="robot::g_dbg"):
     out = subprocess.run([nm, "-S", "-C", elf], capture_output=True)
     for line in out.stdout.decode("utf-8", "ignore").splitlines():
-        if name in line:
-            parts = line.split()
-            # 形如: 20000c6c 00000060 V robot::g_dbg
-            try:
-                addr = int(parts[0], 16)
-                size = int(parts[1], 16)
-                return addr, size
-            except (ValueError, IndexError):
-                continue
+        parts = line.split()
+        # 形如: 20000c6c 00000060 V robot::g_dbg
+        if len(parts) < 4:
+            continue
+        # 必须**完全相等**：原来写的是 `if name in line`（子串匹配），
+        # 一旦工程里出现 `robot::g_dbg_dead_count` 这种同前缀符号，
+        # 默认查 `robot::g_dbg` 就会命中它，读出 4 字节的计数当 96 字节快照 —— 现场踩过。
+        sym_name = " ".join(parts[3:])
+        if sym_name != name:
+            continue
+        try:
+            return int(parts[0], 16), int(parts[1], 16)
+        except (ValueError, IndexError):
+            continue
     return None, None
 
 

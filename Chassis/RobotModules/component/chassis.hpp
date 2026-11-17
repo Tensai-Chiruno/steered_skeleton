@@ -86,6 +86,13 @@ class Chassis {
   void setFrameDelta(float delta) { frame_delta_ = delta; }
   float frameDelta(void) const { return frame_delta_; }
 
+  /** @brief 是否按 δ 把遥控的 (vx, vy) 从**云台坐标系**旋到车体系。
+   *  考核第 6 项的实现点：跟随 / 小陀螺 = true（车朝云台指向前进）；
+   *  分离 = false（纯车头坐标系，转云台不影响行走方向）。
+   *  由 Robot 每拍按当前模式下发，所以"分离/跟随"的差别不只是 w 的来源，
+   *  连平移方向的参考系都不一样 —— 这才是这三种模式的本质区别。 */
+  void setRotateByDelta(bool on) { params_.rotate_velocity_by_delta = on; }
+
   void setTarget(const ChassisMotion &tar) { target_ = tar; }
   const ChassisMotion &target(void) const { return target_; }
 
@@ -113,6 +120,11 @@ class Chassis {
   float frame_delta_ = 0.0f;                        ///< 云台相对车头的夹角 δ
   bool enabled_ = false;
   bool inited_ = false;
+  /* 【安全】反馈丢失检测（见 chassis.cpp 里那段说明）：
+   * 两路电机反馈计数之和超过 kFeedbackTimeoutMs 没变化 -> 立刻零输出。 */
+  static constexpr uint32_t kFeedbackTimeoutMs = 50u;
+  uint32_t last_rx_sum_ = 0xFFFFFFFFu;
+  uint32_t last_rx_ms_ = 0;
   /* 【调试区 · 一次性舵角符号测试】状态（排障完连同 chassis.cpp 里那段一起删） */
   bool bench_started_ = false;
   bool bench_force_run_ = false;   /* 台架闭环测试窗口内强制运行 */

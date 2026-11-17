@@ -213,6 +213,10 @@ uint32_t MotorSteerRxCount(void) {
   return g_steer_rx_count;
 }
 
+uint32_t MotorWheelRxCount(void) {
+  return g_wheel_rx_count;
+}
+
 void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
                            const uint8_t data[8]) {
   EnsureInit();
