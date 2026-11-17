@@ -65,7 +65,13 @@ CAN_HandleTypeDef *const kSteerBus = &hcan1;
 constexpr uint8_t kWheelId[kWheelNum] = {1, 2, 3, 4};
 constexpr hello_world::motor::Dir kWheelDir[kWheelNum] = {
     hello_world::motor::kDirFwd, hello_world::motor::kDirFwd,
-    hello_world::motor::kDirFwd, hello_world::motor::kDirRev};  // RF 反向：
+    hello_world::motor::kDirFwd, hello_world::motor::kDirFwd};  // RF 改回 Fwd，见下：
+/* 【2026-11-18 闭环实测】RF 用 kDirRev 时闭环符号是反的：
+ *   遥控前推 -> 三台 tgt=+12.42 / vel=+6.91,+8.67,+8.30，而 RF vel=-7.57、指令也为负，
+ *   即该轮的"逻辑正"与其它三轮相反，整车会原地打转。
+ * 11-17 那次"前推车身四轮符号一致"是**开环手推**测的：手推时轮子是发电机，
+ * 编码器符号只反映机械安装方向；闭环要的是"逻辑正=车前进"，两者基准不同。
+ * 改成 kDirFwd 后逻辑正与其它三轮一致。*/
 /* 现场实测 2026-11-17（J-Link 读 robot::g_dbg，前推车身时四轮轮速符号）：
  *   前推 → LF +1.53  LB +1.69  RB +1.62  RF -1.14
  *   回拉 → LF -3.10  LB -2.86  RB -2.89  RF +2.69   （三段来回，符号完全可复现）
@@ -98,6 +104,8 @@ constexpr float kSteerOffset[kSteerNum] = {2.61346f, -2.06844f, 0.00729f,
  * 比"开机 N 秒后"可靠得多（现场顺序必须是先断电、复位、再上电）。
  * 必须放在匿名 namespace 之外，才能被 ins_motor.hpp 里导出的访问函数拿到。 */
 volatile uint32_t g_steer_rx_count = 0;
+/* 轮电机（M3508，CAN2）反馈帧累计计数，用途同上（区分"没指令"和"没反馈"）。 */
+volatile uint32_t g_wheel_rx_count = 0;
 
 namespace {
 
@@ -225,6 +233,8 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
     /* 只有"确实命中舵电机反馈 ID"的帧才计数（CAN1 上还有板间帧 0x211，不能算）。 */
     if (hcan == kSteerBus) {
       ++g_steer_rx_count;
+    } else if (hcan == kWheelBus) {
+      ++g_wheel_rx_count;
     }
     return;
   }

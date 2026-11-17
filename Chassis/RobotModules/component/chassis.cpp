@@ -45,6 +45,11 @@ volatile float g_dbg_steer_vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 /* 台架窗口的触发状态：[0]=armed 标志, [1]=MotorSteerRxCount() 读到的值。
  * 用来分辨"窗口没 arm"到底是计数为 0（RX 没进来）还是逻辑没走到。 */
 volatile uint32_t g_dbg_bench[2] = {0u, 0u};
+/* 【诊断·临时】轮电机：PID 原始输出、限幅后真正下发的电流（A）。排障完删。
+ * 现场症状：遥控推杆后逆解目标到 20 rad/s，但四个轮子悬空也不转、没声音，
+ * 说明电流没到电机。这两个探针用来分清"PID 没算"还是"算了但没下发"。 */
+volatile float g_dbg_wheel_pd[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+volatile float g_dbg_wheel_cmd[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
 namespace {
 /* 【调试区 · 一次性舵角符号测试】参数（排障完连同那段代码一起删） */
@@ -384,8 +389,12 @@ void Chassis::update(void) {
       // 与目标同域，所以这里同样是"直接相减"。
       wheel_raw = pidw->update(wheel_vel_target, wheel->vel(), kDt);
     }
-    // 安培域限幅（M3508 满量程 20 A，这里默认 5 A）。同 steer：不是 raw。
-    wheel->setInput(Clamp(wheel_raw, -params_.wheel_curr_limit, params_.wheel_curr_limit));
+    // raw 域限幅（轮电机是 kRaw！不是安培；M3508 满量程 16384，默认 3000 ≈ 3.7 A）。
+    const float wheel_cmd = Clamp(wheel_raw, -params_.wheel_raw_limit, params_.wheel_raw_limit);
+    wheel->setInput(wheel_cmd);
+    /* 【诊断·临时】轮电流探针。排障完删。 */
+    g_dbg_wheel_pd[i] = wheel_raw;
+    g_dbg_wheel_cmd[i] = wheel_cmd;
   }
 }
 
