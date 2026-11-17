@@ -34,6 +34,7 @@
 #include "assert.hpp"
 #include "can.h"
 #include "module_state.hpp"  /* robot::g_mit_input_allowed：非 Working 时不发达妙帧 */
+#include "tick.hpp"          /* hello_world::tick::GetTickMs()：使能命令限频 */
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -64,6 +65,13 @@ hello_world::motor::DM_J4310 yaw_;
 hello_world::motor::DM_J4310 pitch_;
 bool inited_ = false;
 
+/* 使能命令限频（见 MotorSendAllCommands 里的说明）。
+ * 之所以要自己做，是因为驱动里的 auto_enable 是"每帧发现未使能就发一次"，
+ * 反馈一不稳就变成 1 kHz 反复使能 -> 电机抽搐。 */
+constexpr uint32_t kEnableRetryMs = 500u;
+bool g_enable_dirty = true;
+uint32_t g_last_enable_ms = 0;
+
 void EnsureInit(void) {
   if (inited_) {
     return;
@@ -77,7 +85,7 @@ void EnsureInit(void) {
   opt_yaw.remove_build_in_reducer = false;
   opt_yaw.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
   opt_yaw.angle_offset = kYawOffset;
-  yaw_.init(kYawId, opt_yaw, true, false);
+  yaw_.init(kYawId, opt_yaw, false, false);  /* auto_enable=false, enable_mode_switch=false：改由 MotorSendAllCommands 限频显式使能 */
 
   /* pitch：只用关节角的一小段，限位由上层用反馈角度做，不在这里卡死 */
   hello_world::motor::OptionalParams opt_pitch;
@@ -87,7 +95,7 @@ void EnsureInit(void) {
   opt_pitch.remove_build_in_reducer = false;
   opt_pitch.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
   opt_pitch.angle_offset = kPitchOffset;
-  pitch_.init(kPitchId, opt_pitch, true, false);
+  pitch_.init(kPitchId, opt_pitch, false, false);  /* 同上 */
 
   /* 把期望的 CAN ID 钉死：DM 的反馈恒为 id + 0x10，控制恒为 id。
    * 这条同时是对「考核说明表格写反了」的固化——真实情况以设备类为准，
@@ -163,7 +171,31 @@ void MotorSendAllCommands(void) {
    *   - Working：正常发 MIT 帧
    * 与"急停 = 零力矩 ≈ 松掉"的设计一致，也避免"没反馈就狂发使能"这条隐患。 */
   if (!robot::g_mit_input_allowed) {
+    g_enable_dirty = true;   /* 下次进 Working 要重新使能 */
     return;
+  }
+
+  /* 【安全】使能命令限频。
+   *
+   * 为什么：DaMiao 驱动里的 auto_enable 只要反馈显示"未使能"就每帧发一次使能命令，
+   * 而一旦使能状态/反馈有任何不稳，就会变成"每 1 ms 反复使能"→ 电机反复抽搐
+   * （2026-11-17 现场两次踩到；第一次在 Dead、第二次在 Working）。
+   *
+   * 现在把 auto_enable / enable_mode_switch 都关掉（见 EnsureInit），改由这里显式控制：
+   *   - 进入 Working 时补发一次使能；
+   *   - 之后每 500 ms 最多补一次"仍未使能"的使能命令；
+   *   - 绝不在同一控制周期里重复发。
+   * 频率从 1000 Hz 降到 2 Hz，且语义清晰：我们只在"想让它使能"的时候才发。 */
+  const uint32_t now_ms = hello_world::tick::GetTickMs();
+  if (g_enable_dirty || (now_ms - g_last_enable_ms) >= kEnableRetryMs) {
+    g_enable_dirty = false;
+    g_last_enable_ms = now_ms;
+    if (!yaw_.is_enabled()) {
+      yaw_.enable();
+    }
+    if (!pitch_.is_enabled()) {
+      pitch_.enable();
+    }
   }
 
   uint8_t buf[8];
