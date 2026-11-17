@@ -54,7 +54,7 @@ void EnsureInit(void) {
     g_pid_wheel[i].init(p);
 
     hello_world::pid::Pid::Params q = p;
-    q.kp = 0.0f;   /* 舵角环：收工归零。现场结论：上电时舵轮若停在 ±180° 附近，误差≈π 是最坏初始条件（就近转弯的歧义边界），任何增益都会给出满输出 -> 抽搐。明天先手动把四个轮摆到 0° 附近，再从 kp=200 起整定，并给舵角输出加变化率限幅。 */
+    q.kp = 0.0f;   /* 舵角环：现场出现单向连续旋转（疑似反馈符号与输出相反或 GM6020 为连续转动模式）-> 收工归零，明天先单独验符号 */
     q.output_limit = kSteerOutLimit;
     q.angle_wrap = true;    /* 舵向是角度环，必须回绕 */
     g_pid_steer[i].init(q);

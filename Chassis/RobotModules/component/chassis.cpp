@@ -74,7 +74,8 @@ void Chassis::init(void) {
     auto *pw = GetPidMotorWheel(i);
     if (ps) ps->reset();
     if (pw) pw->reset();
-    steer_hold_[i] = 0.0f;  // 死区保持值也清掉
+    steer_hold_[i] = 0.0f;
+    steer_out_[i] = 0.0f;  // 死区保持值也清掉
   }
   target_.reset();   // 目标速度清零
   inited_ = true;    // 允许 update() 工作（否则 update 第一句就 return）
@@ -111,6 +112,7 @@ void Chassis::setOutputZero(void) {
     if (ps) ps->reset();  // 清积分：否则下次使能会带着旧积分突跳
     if (pw) pw->reset();
     steer_hold_[i] = 0.0f;
+    steer_out_[i] = 0.0f;
   }
 }
 
@@ -226,7 +228,28 @@ void Chassis::update(void) {
     }
     // 最后一道限幅：raw 域（GM6020 电压帧满量程 25000，这里默认 20000）。
     // 台架整定阶段建议先降到 3000~5000，防止一脚打飞。
-    steer->setInput(Clamp(steer_raw, -steer_raw_limit, steer_raw_limit));
+    const float steer_cmd = Clamp(steer_raw, -steer_raw_limit, steer_raw_limit);
+
+    /* 【现场修复 2026-11-17】舵角输出**变化率限幅**。
+     *
+     * 为什么必须加：现场三次"疯狂抽搐"的根因不是增益大小，而是**初始条件**——
+     * 上电时舵轮停在 ±180° 附近，目标 0° 的误差≈π，正是"就近转弯"的歧义边界，
+     * 任何增益都会立刻给出满限幅电流，电机瞬间满力冲出。
+     *
+     * 现在每拍最多改变 params_.steer_raw_slew * dt：
+     *   2000 raw/s × 1 ms = 2 raw/拍 -> 从 0 加到 3000 需要 1.5 秒，
+     * 于是"无论多大误差、多坏的初始姿态"，输出都只能是缓慢爬升，冲不起来。
+     */
+    const float dmax = params_.steer_raw_slew * kDt;
+    const float d = steer_cmd - steer_out_[i];
+    if (d > dmax) {
+      steer_out_[i] += dmax;
+    } else if (d < -dmax) {
+      steer_out_[i] -= dmax;
+    } else {
+      steer_out_[i] = steer_cmd;
+    }
+    steer->setInput(steer_out_[i]);
 
     /* ---- 轮速环 ----
      * 逆解已经把轮心线速度按 params_.wheel_radius 折算成「输出端 rad/s」，

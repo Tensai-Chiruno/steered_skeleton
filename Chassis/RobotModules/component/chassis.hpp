@@ -45,6 +45,7 @@ class Chassis {
     float max_wheel_vel = 120.0f;     ///< 轮电机输出端角速度限幅，rad/s
     float steer_raw_limit = 3000.0f;  ///< 舵电机 raw 限幅（GM6020 电流模式；收工压到 2000 防自激）
     float wheel_raw_limit = 5000.0f;  ///< 轮电机 raw 限幅（M3508 满量程 16384；首次闭环先压到 5000 防窜车）
+    float steer_raw_slew = 2000.0f;  ///< 舵角输出变化率限幅（raw/s）：防大误差瞬间满电流
     float steer_deadband = 0.01f;     ///< 舵角误差死区，rad
     /** 是否按 δ 把遥控的 (vx, vy) 从云台系旋到车体系。
      *  考核 3.2「前进正方向始终是云台朝向」→ true（默认）。
@@ -85,6 +86,7 @@ class Chassis {
   ChassisMotion target_{};
   hello_world::chassis_ik_solver::ChassisIkSolver::WheelState wheel_state_[4]{};
   float steer_hold_[4] = {0.0f, 0.0f, 0.0f, 0.0f};  ///< 死区内保持的舵输出
+  float steer_out_[4] = {0.0f, 0.0f, 0.0f, 0.0f};   ///< 经过变化率限幅后的实际舵输出（现场修复 2026-11-17）
   float frame_delta_ = 0.0f;                        ///< 云台相对车头的夹角 δ
   bool enabled_ = false;
   bool inited_ = false;
