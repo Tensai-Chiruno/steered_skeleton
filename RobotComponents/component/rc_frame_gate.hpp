@@ -45,7 +45,11 @@ struct RcSticks {
 class RcFrameGate {
  public:
   static constexpr float kJumpLimit = 0.45f;
-  static constexpr uint32_t kBadLimit = 3;
+  /* 【现场调整 2026-11-17】3 帧（21 ms）就判离线太激进。
+   * 现场现象：DBUS 每隔一两秒会有一小段解不出来 → 云台被反复"急停→恢复"，
+   * 一急停力矩归零、云台在重力下掉下去，再恢复又被托住，看着就是"猛砸"。
+   * 10 帧 = 70 ms：仍远快于人的反应，但正常抖动不会误触发急停。 */
+  static constexpr uint32_t kBadLimit = 10;
 
   void reset(void) {
     primed_ = false;

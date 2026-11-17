@@ -41,7 +41,13 @@
 namespace {
 /* ---- 量纲的唯一来源（P0-1）：配置、断言、发送帧 ID 三处都用这两个常量 ---- */
 constexpr hello_world::motor::InputType kWheelInputType = hello_world::motor::InputType::kRaw;
-constexpr hello_world::motor::InputType kSteerInputType = hello_world::motor::InputType::kRaw;
+/* 【现场实测 2026-11-17】GM6020 改用**电流模式**（0x1FE）。
+ *
+ * 证据链：CAN1 上 TEC=0、tx_fail 冻结 —— 说明我们发往 0x1FF 的帧**都被 ACK 了**，
+ * 也就是 GM6020 确实收到了；但 0x205~0x208 的反馈帧一帧都没有、舵角实测 15 秒纹丝不动。
+ * CAN 的 ACK 与"是否采纳该帧"无关：电机在电流模式时会 ACK 电压帧却既不执行也不回反馈，
+ * 现象与本机完全一致。文档写"默认电压控制"，但今天文档已在拓扑、yaw ID 上两次出错。 */
+constexpr hello_world::motor::InputType kSteerInputType = hello_world::motor::InputType::kCurr;
 
 
 constexpr int kWheelNum = 4;  ///< 轮电机（M3508）数量
@@ -137,8 +143,8 @@ void EnsureInit(void) {
   HW_ASSERT(hello_world::motor::M3508::GetRxId(1) == 0x201, "wheel rx id");
   /* 这条断言必须用「真正配置电机用的那个常量」，否则它恒为真、等于没写
    * （P0-1：旧写法传的是字面量 kRaw，而 opt.input_type 是 kCurr，两者不一致却没被发现）。 */
-  HW_ASSERT(hello_world::motor::GM6020::GetTxId(kSteerId[0], kSteerInputType) == 0x1FF,
-            "steer tx id must be 0x1FF: input_type and frame must both be kRaw");
+  HW_ASSERT(hello_world::motor::GM6020::GetTxId(kSteerId[0], kSteerInputType) == 0x1FE,
+            "steer tx id must be 0x1FE: 现场实测 GM6020 在电流模式，0x1FF 电压帧只被 ACK 不执行");
   HW_ASSERT(hello_world::motor::M3508::GetTxId(kWheelId[0]) == 0x200,
             "wheel tx id must be 0x200");
   HW_ASSERT(hello_world::motor::GM6020::GetRxId(1) == 0x205, "steer rx id");

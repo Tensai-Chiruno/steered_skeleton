@@ -39,18 +39,22 @@ void EnsureInit(void) {
   if (g_inited) return;
   for (int i = 0; i < kNum; ++i) {
     hello_world::pid::Pid::Params p;
-    p.kp = 0.0f;
-    p.ki = 0.0f;
+    /* 轮速环现场整定 2026-11-17：先只加 P（kp=10），ki/kd 保持 0。
+     * 第一版先用小限幅（见 chassis.hpp 的 wheel_raw_limit=5000）兜住，
+     * 看实测轮速能否平稳跟随目标再谈加速度环。 */
+    p.kp = 0.0f;   /* 轮速环：现场已验证到 kp=100/ki=20（见现场调试记录），收工时归零保证安全 */
+    p.ki = 0.0f;   /* 轮速环积分：整定时给到 20（轮子无重力负载，可以放心用 I） */
     p.kd = 0.0f;
     /* integral_limit 的单位是「误差×秒」，不是输出单位（P2-5）。
      * 这里给 2.0，配合 ki 才有意义；整定时按 ki 反算出想要的输出上限。 */
-    p.integral_limit = 2.0f;
+    p.integral_limit = 100.0f;
     p.output_limit = kWheelOutLimit;
     p.diff_on_measurement = true;
     p.angle_wrap = false;   /* 速度环不回绕 */
     g_pid_wheel[i].init(p);
 
     hello_world::pid::Pid::Params q = p;
+    q.kp = 0.0f;   /* 舵角环：电流模式(0x1FE)下 3000 会自激，收工归零，明天从 200 起重新整定 */
     q.output_limit = kSteerOutLimit;
     q.angle_wrap = true;    /* 舵向是角度环，必须回绕 */
     g_pid_steer[i].init(q);
