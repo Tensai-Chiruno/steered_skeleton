@@ -26,13 +26,19 @@ namespace {
 constexpr uint32_t kC2gId = 0x210;  // 考核说明 3.4 建议值
 constexpr uint32_t kG2cId = 0x211;  // 必须避开 0x200/0x201~0x208/0x01~0x1F
 
-/* 双板通讯固定在 CAN2：CAN2 是主干（yaw/pitch 电机帧 + 双板帧共用）。
- * 判据：电机不动 = 查 CAN2 上的电机帧；双板不同步 = 查 CAN2 上的双板帧。
- *   两者都在同一根线上，所以 CAN2 出错时两种现象会同时出现，别当成两个独立故障。
- * CAN1 本板未使用：它虽然被配了全收滤波 + HAL_CAN_Start + FIFO0 通知，
- *   但 BoardCommDispatch / MotorDispatchCanFrame 对 hcan1 一律直接 return，
- *   所以**误接到 CAN1 的任何设备表现为"完全没反应、也不报错"**，不要到 CAN1 上找问题。 */
-CAN_HandleTypeDef *const kBoardBus = &hcan2;
+/* 双板通讯总线 —— **2026-11-17 现场实测改成 CAN1**（原先是 CAN2，文档也是这么写的，但实车不是）。
+ *
+ * 现场怎么测出来的（tools/diag_can_sniff.py 把过滤器临时设成全收，把总线上的 ID 列出来）：
+ *   云台板 **CAN1** 上同时看到 0x200（轮电机控制帧）、0x202/0x203/0x204（M3508 反馈）、
+ *   **以及 0x210（底盘 → 云台的板间帧）**；
+ *   而云台板 **CAN2** 上只有达妙电机的应答。
+ *   ⇒ 实车拓扑是：**云台 CAN1 ↔ 底盘 CAN2（主干）；云台 CAN2 ↔ 两台达妙电机**。
+ *
+ * 之前配在 CAN2 的后果：底盘发的 0x210 落在云的 CAN1 上，
+ * BoardCommDispatch 判 `hcan != kBoardBus` 直接 return → 永远"对端离线"
+ * → 而 robot.cpp 有"对端离线强制急停"的互保 → 状态机永远进不了 Working。
+ * 现象就是"明明都通电、遥控也正常，车就是不动"。 */
+CAN_HandleTypeDef *const kBoardBus = &hcan1;
 
 robot::GimbalChassisComm g_comm(robot::GimbalChassisComm::CodePart::Gimbal, kG2cId, kC2gId);
 

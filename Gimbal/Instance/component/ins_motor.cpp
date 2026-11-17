@@ -33,6 +33,7 @@
 #include "HW_can.hpp"
 #include "assert.hpp"
 #include "can.h"
+#include "module_state.hpp"  /* robot::g_mit_input_allowed：非 Working 时不发达妙帧 */
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -148,6 +149,22 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
 
 void MotorSendAllCommands(void) {
   EnsureInit();
+
+  /* 【安全】非 Working 期间，**一帧都不发给达妙电机**。
+   *
+   * 为什么必须这样（2026-11-17 现场实测踩到的）：
+   *   DaMiao::encode() 里有 auto_enable 逻辑：只要反馈显示电机"未使能"，就发一帧
+   *   使能命令（0xFF×8）。而一旦接收链路有问题（收不到反馈帧），is_enabled 永远是
+   *   false → **每 1 ms 发一次使能命令**，电机被反复使能，现场现象就是云台顶部
+   *   电机"反复抽搐"。这种抽搐是真实力矩输出，既危险，也不是我们要的行为。
+   *
+   * 现在的策略：
+   *   - Dead / Resurrection：不发任何电机帧（电机保持原状，或按其自身超时松力）
+   *   - Working：正常发 MIT 帧
+   * 与"急停 = 零力矩 ≈ 松掉"的设计一致，也避免"没反馈就狂发使能"这条隐患。 */
+  if (!robot::g_mit_input_allowed) {
+    return;
+  }
 
   uint8_t buf[8];
 
