@@ -28,9 +28,35 @@
 
 // 引入完整 Pid 定义（ins_pid.hpp 里只有前置声明，调成员函数必须看到完整类型）
 #include "pid.hpp"
+#include "tick.hpp"
 
 /* Private macro -------------------------------------------------------------*/
+
+/* 【诊断·临时】舵角环三个关键量的"探针"：直接暴露成全局符号，用 SWD 读。
+ * 为什么要单独开变量而不塞进 g_dbg：g_dbg 的布局是 96 字节定长，加字段要同步改
+ * 上位机解析；而排障只需要 12 个 float，单独读符号更快、改完就删。
+ *   g_dbg_steer_cmd = 真正下发进 CAN 帧的 raw（经过死区保持 + 限幅 + 变化率限幅）
+ *   g_dbg_steer_pd  = 限幅前的 PD 控制量（看增益是不是打满）
+ *   g_dbg_steer_vel = 电机反馈角速度（看 D 项是不是在被噪声放大）
+ */
+volatile float g_dbg_steer_cmd[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+volatile float g_dbg_steer_pd[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+volatile float g_dbg_steer_vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+/* 台架窗口的触发状态：[0]=armed 标志, [1]=MotorSteerRxCount() 读到的值。
+ * 用来分辨"窗口没 arm"到底是计数为 0（RX 没进来）还是逻辑没走到。 */
+volatile uint32_t g_dbg_bench[2] = {0u, 0u};
+
 namespace {
+/* 【调试区 · 一次性舵角符号测试】参数（排障完连同那段代码一起删） */
+constexpr float kBenchRaw = 0.5f;     /* A（电流域！不是 raw。原来写 150 = 150A 已满电流） */
+constexpr uint32_t kBenchMs = 600u;   /* 持续 300 ms 后永久归零 */
+constexpr uint32_t kBenchStartMs = 2000u;   /* 兜底触发：开机满 2 s 也可（等总线/电机就绪） */
+constexpr bool kBenchEnable = false;   /* 一次性开环测试：已验证完，关掉 */
+constexpr uint32_t kBenchLoopMs = 5000u;  /* 台架闭环测试窗口长度：由“舵反馈第一次到达”起算 */
+constexpr float kBenchStepRad = 0.5235988f;  /* 台架阶跃：+30°（测阶跃响应用） */
+/* 台架闭环窗口总开关：2026-11-18 已验证通过（四个舵轮 +30° 阶跃、稳态电流 0.04~0.07 A、
+ * 无振荡、CAN 错误 0），**收工必须置 false**，否则每次开机都会给舵角加 30° 阶跃。 */
+constexpr bool kBenchLoopEnable = false;
 // 控制周期写死 1 ms，与 TIM6 的中断频率一致。PID 的 dt 必须与之一致，
 // 否则微分/积分项的等效增益会整体偏一个倍数。
 constexpr float kDt = 1e-3f;
@@ -102,6 +128,16 @@ void Chassis::setEnabled(bool en) {
  * 不能因为某个 getter 返回 nullptr 就跳过整轮循环。
  */
 void Chassis::setOutputZero(void) {
+  /* 【调试·台架窗口】窗口内输出由 update() 自己管线负责，任何外部"归零请求"都跳过。
+   * 为什么必须加：状态机在 Dead 状态下每拍都会调用本函数，
+   * 而它会把 steer_out_ 清零 —— 于是舵角环每个周期都从 0 开始爬变化率限幅，
+   * 永远只能输出"一拍的变化量"（旧版 = 2 raw，新版 = 0.006 A）。
+   * 现场表现极具误导性：PD 算得好好的、探针里的指令却永远约等于 0，
+   * 让人以为增益/限幅不对，其实是输出被人从后面擦掉了。
+   * 只影响 5 s 台架窗口（最大 1.5 A），窗口一过立刻恢复"无论如何写 0"。 */
+  if (bench_force_run_) {
+    return;
+  }
   for (int i = 0; i < 4; ++i) {
     auto *steer = GetMotorSteer(i);
     auto *wheel = GetMotorWheel(i);
@@ -134,9 +170,63 @@ void Chassis::update(void) {
   if (!inited_ || ik_ == nullptr) {
     return;
   }
+
+  /* ===== 【调试区 · 一次性舵角符号测试】开始 =====
+   * 目的：确定"正的 raw 输出"让舵角变大还是变小（正反馈就是疯转的根因）。
+   * 做法：开机后 kBenchStartMs ~ kBenchStartMs+kBenchMs 之间，**只给 LF 舵电机**
+   *       kBenchRaw（150 raw，满量程 0.9%），其它三个舵电机和四个轮电机全 0；
+   *       窗口结束立刻全部归零、并且之后不再执行。
+   * 特点：不经过 PID（不存在正反馈）、不依赖状态机/遥控（只要有电就准时执行一次），
+   *       所以可以在"先烧录、后通电"的安全顺序下做。
+   * 排障完把本段连同 chassis.hpp 里的 bench_* 成员一起删掉（grep【调试区 · 一次性】）。
+   */
+  {
+    const uint32_t now_ms = hello_world::tick::GetTickMs();
+    if (kBenchEnable && now_ms >= kBenchStartMs && now_ms < (kBenchStartMs + kBenchMs)) {
+      for (int i = 0; i < 4; ++i) {
+        auto *st = GetMotorSteer(i);
+        auto *wh = GetMotorWheel(i);
+        if (st != nullptr) {
+          st->setInput((i == 0) ? kBenchRaw : 0.0f);   /* 只有 LF 出力 */
+        }
+        if (wh != nullptr) {
+          wh->setInput(0.0f);                          /* 轮子一帧都不出力 */
+        }
+      }
+      return;   /* 测试窗口内不跑正常控制 */
+    }
+  }
+  /* ===== 【调试区 · 一次性舵角符号测试】结束 ===== */
+
   // 未使能：每拍都主动把输出压成 0（而不是"保持上次值"）。
   // 这样即使有人误改了 target_，也不会在未使能时被下发。
-  if (!enabled_) {
+  /* 【调试区 · 舵角环台架闭环测试】窗口由**舵电机反馈第一次到达**触发。
+   *
+   * 为什么不用开机计时：现场的安全顺序必须是「先断电 → 烧录/复位 → 再上电」，
+   * 上电时刻比复位晚好几秒，任何"开机 N 秒后开始"的窗口都赶不上，
+   * 要么窗口在没电时白跑完，要么逼着人带电复位（2026-11-17 就是这么把 CAN
+   * 打坏、把四台 GM6020 逼成高频啸叫的）。
+   * 改成监听 CAN1 上 GM6020 的反馈计数：反馈一到 = 电机已上电 + 总线已活，
+   * 从那一刻起开 kBenchLoopMs 的窗口。
+   * 窗口外行为完全不变（未使能就压 0）。排障完删掉本段。 */
+  {
+    static bool armed = false;
+    static uint32_t start_ms = 0;
+    const uint32_t now_ms = hello_world::tick::GetTickMs();
+    /* 两条触发并联：舵反馈计数到了（电机已上电 + 总线已活）**或**开机满 2 s。
+     * 为什么并联：2026-11-18 现场出现过"只用反馈计数"却始终不 arm 的情况
+     * （g_steer_rx_count 明明在涨），为了不再猜，把 armed 标志和计数值也做成探针
+     * g_dbg_bench[] 一起读出来；同时保留开机计时作为兜底，保证一次复位就能拿到数据。
+     * （整片 AIRCR 复位已验证可在电机通电时安全使用：实测 TEC 全程 0。） */
+    if (!armed && (MotorSteerRxCount() > 0u || now_ms >= kBenchStartMs)) {
+      armed = true;
+      start_ms = now_ms;
+    }
+    bench_force_run_ = kBenchLoopEnable && armed && ((now_ms - start_ms) < kBenchLoopMs);
+    g_dbg_bench[0] = armed ? 1u : 0u;
+    g_dbg_bench[1] = MotorSteerRxCount();
+  }
+  if (!enabled_ && !bench_force_run_) {
     setOutputZero();
     return;
   }
@@ -185,6 +275,12 @@ void Chassis::update(void) {
      * 「数学上等价、机械上很远」的位置。这里以当前实测角为基准挑近的那个。 */
     float target_angle = wheel_state_[i].angle;
     float target_speed = wheel_state_[i].speed;
+    /* 【调试·台架】窗口内给所有舵角加一个固定阶跃，用来测阶跃响应
+     * （上升时间、超调、稳态误差、有没有振荡）。不加阶跃就只能"保持原位"，
+     * 什么都测不出来。窗口外为 0，不影响正常控制。 */
+    if (bench_force_run_) {
+      target_angle += kBenchStepRad;
+    }
     // 候选一：直接采用逆解角。err_fwd 是它相对当前角的**回绕后**误差，
     // 范围 [-π, π]。用 fmod 实现回绕而不是 while 循环：耗时确定，适合 1 kHz。
     const float err_fwd = std::fmod(target_angle - cur_angle + 3.14159265f, 6.28318531f) - 3.14159265f;
@@ -193,7 +289,13 @@ void Chassis::update(void) {
     const float err_rev = std::fmod(target_angle + 3.14159265f - cur_angle + 3.14159265f,
                                     6.28318531f) - 3.14159265f;
     // 谁的角度误差绝对值更小就选谁：机械行程更短，不会出现"上电就大角度回摆"。
-    if (std::fabs(err_rev) < std::fabs(err_fwd)) {
+    /* 【现场修复 2026-11-18】加滞回（kSolHysRad），只有"明确更近"才换解。
+     * 为什么：两个等价解在 cur_angle ≈ ±180° 处距离相等，无滞回时会被电机自身
+     * 的抖动/旋转每拍翻一次，目标在 0 与 ±180° 之间跳变 —— 环永远收不住。
+     * 现场 bench7 实测：LF 以 30 rad/s 旋转时目标在 0.00° / -180.00° 之间逐拍翻转。
+     * 滞回取 0.5 rad（28.6°）：误差差不够大就保持"正向解"，行为稳定且可预测。 */
+    constexpr float kSolHysRad = 0.5f;
+    if (std::fabs(err_rev) + kSolHysRad < std::fabs(err_fwd)) {
       target_angle += 3.14159265f;  // 舵角转 180°
       target_speed = -target_speed; // 轮速取反，保证行走方向不变
     }
@@ -205,17 +307,28 @@ void Chassis::update(void) {
 
     /* ---- 舵向角度环 ---- */
     // 每拍取一次限幅值（成员参数可能被现场改），避免在循环里反复解引用。
-    const float steer_raw_limit = params_.steer_raw_limit;
+    // 单位是**安培**（见 chassis.hpp 里那段说明），不是报文 raw。
+    const float steer_curr_limit = params_.steer_curr_limit;
     // 再算一次回绕误差，供死区判断用（与上面 err_fwd 同源，但这里是就近解之后的最终值）。
     const float err = std::fmod(target_angle - cur_angle + 3.14159265f, 6.28318531f) - 3.14159265f;
 
     auto *pid = GetPidMotorSteer(i);
     float steer_raw = 0.0f;
+    float vel_meas = 0.0f;
     if (pid != nullptr) {
-      /* 无条件调用，保证 PID 的 dt 契约（P2-14 / G-2：跳拍会把 D 项放大 N 倍） */
-      // target/measured 都已被 angle_offset 折算到同一基准；angle_wrap 已在 ins_pid 里打开，
-      // 所以 PID 内部还会对误差和"测量差"各做一次回绕，防止过 ±π 时 D 项尖峰。
-      steer_raw = pid->update(target_angle, cur_angle, kDt);
+      /* 【现场修复 2026-11-18】舵角环改用手写 PD，D 项直接用电机反馈的角速度。
+       *
+       * 原来的写法是 pid->update(target, measured, dt)，它的 D 项对测量角度做差分；
+       * 而舵角在 ±180 处会回绕，一次回绕就产生 358 度/帧的假角速度，
+       * D 项瞬间打满 -> 反向加速 -> 又在边界另一侧回绕 -> 永久振荡。
+       * 现场实测：LB/RF 恰好停在 ±180 附近，无论怎么调 kp/kd 都收不住。
+       *
+       * 现在：err 回绕（安全）+ 阻尼项用 steer->vel()（连续、不回绕），
+       *      再过死区保持 / 限幅 / 变化率限幅。
+       * PID 对象仍然保留给轮速环用。 */
+      (void)pid;   /* 保留对象实例，避免影响其他地方对 PID 的访问 */
+      vel_meas = (steer != nullptr) ? steer->vel() : 0.0f;
+      steer_raw = params_.steer_kp * err - params_.steer_kd * vel_meas;
     }
     if (err < params_.steer_deadband && err > -params_.steer_deadband) {
       /* 死区内不切断输出，而是保持上一拍的值：
@@ -226,21 +339,21 @@ void Chassis::update(void) {
       // 出了死区就更新保持值，供下次进死区时使用。
       steer_hold_[i] = steer_raw;
     }
-    // 最后一道限幅：raw 域（GM6020 电压帧满量程 25000，这里默认 20000）。
-    // 台架整定阶段建议先降到 3000~5000，防止一脚打飞。
-    const float steer_cmd = Clamp(steer_raw, -steer_raw_limit, steer_raw_limit);
+    // 最后一道限幅：安培域（GM6020 满量程 3 A，默认只给 1.5 A）。
+    // 注意这里之前写的是 "raw 域满量程 25000"，那就是满电流抖动的源头：
+    // setInput() 在 kCurr 下把 25000 当 25000 A，Bound 到 3 A 后 raw 直接打满。
+    const float steer_cmd = Clamp(steer_raw, -steer_curr_limit, steer_curr_limit);
 
-    /* 【现场修复 2026-11-17】舵角输出**变化率限幅**。
+    /* 【现场修复 2026-11-17】舵角输出**变化率限幅**（现在单位是 A/s）。
      *
-     * 为什么必须加：现场三次"疯狂抽搐"的根因不是增益大小，而是**初始条件**——
-     * 上电时舵轮停在 ±180° 附近，目标 0° 的误差≈π，正是"就近转弯"的歧义边界，
-     * 任何增益都会立刻给出满限幅电流，电机瞬间满力冲出。
+     * 为什么必须加：上电时舵轮可能停在 ±180° 附近，目标 0° 的误差≈π，
+     * 正是"就近转弯"的歧义边界，任何增益都会立刻要求满电流，电机瞬间满力冲出。
      *
-     * 现在每拍最多改变 params_.steer_raw_slew * dt：
-     *   2000 raw/s × 1 ms = 2 raw/拍 -> 从 0 加到 3000 需要 1.5 秒，
-     * 于是"无论多大误差、多坏的初始姿态"，输出都只能是缓慢爬升，冲不起来。
+     * 现在每拍最多改变 params_.steer_curr_slew * dt：
+     *   6 A/s × 1 ms = 0.006 A/拍 -> 从 0 爬到 1.5 A 要 250 ms，
+     * 于是"无论多大误差、多坏的初始姿态"，输出都只能缓慢爬升，冲不起来。
      */
-    const float dmax = params_.steer_raw_slew * kDt;
+    const float dmax = params_.steer_curr_slew * kDt;
     const float d = steer_cmd - steer_out_[i];
     if (d > dmax) {
       steer_out_[i] += dmax;
@@ -250,6 +363,11 @@ void Chassis::update(void) {
       steer_out_[i] = steer_cmd;
     }
     steer->setInput(steer_out_[i]);
+
+    /* 【诊断·临时】探针：实际命令 / 限幅前 PD / 反馈角速度。排障完删。 */
+    g_dbg_steer_cmd[i] = steer_out_[i];
+    g_dbg_steer_pd[i] = steer_raw;
+    g_dbg_steer_vel[i] = vel_meas;
 
     /* ---- 轮速环 ----
      * 逆解已经把轮心线速度按 params_.wheel_radius 折算成「输出端 rad/s」，
@@ -266,8 +384,8 @@ void Chassis::update(void) {
       // 与目标同域，所以这里同样是"直接相减"。
       wheel_raw = pidw->update(wheel_vel_target, wheel->vel(), kDt);
     }
-    // raw 域限幅：M3508 控制帧满量程 16384，这里默认 16000。
-    wheel->setInput(Clamp(wheel_raw, -params_.wheel_raw_limit, params_.wheel_raw_limit));
+    // 安培域限幅（M3508 满量程 20 A，这里默认 5 A）。同 steer：不是 raw。
+    wheel->setInput(Clamp(wheel_raw, -params_.wheel_curr_limit, params_.wheel_curr_limit));
   }
 }
 

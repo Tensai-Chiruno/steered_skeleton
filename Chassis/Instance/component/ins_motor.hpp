@@ -31,6 +31,11 @@ hello_world::motor::Motor *GetMotorWheel(int idx);
 /* 获取第 idx 号舵电机单例（GM6020，共 4 个，idx ∈ [0,4)）。 */
 hello_world::motor::Motor *GetMotorSteer(int idx);
 
+/* 舵电机（GM6020，CAN1）反馈帧累计计数，只增不减。
+ * 0 = 这一版固件还没收到过任何舵电机反馈（电机没电 / CAN1 不通）。
+ * 现场台架测试用它判断「电机是否已经上电」，不依赖开机计时。 */
+uint32_t MotorSteerRxCount(void);
+
 /* ---------------------------------------------------------------------------
  * CAN 层的两个入口（由 src/HW_can.cpp 与 Task/component/comm_task.cpp 调用）
  *

@@ -93,6 +93,12 @@ constexpr float kSteerOffset[kSteerNum] = {2.61346f, -2.06844f, 0.00729f,
 /* Private types -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 
+/* 舵电机（GM6020，CAN1）反馈帧累计计数。
+ * 用途：给"台架闭环测试窗口"当触发条件 —— 反馈一到就说明电机已上电、总线已活，
+ * 比"开机 N 秒后"可靠得多（现场顺序必须是先断电、复位、再上电）。
+ * 必须放在匿名 namespace 之外，才能被 ins_motor.hpp 里导出的访问函数拿到。 */
+volatile uint32_t g_steer_rx_count = 0;
+
 namespace {
 
 hello_world::motor::M3508 wheel_[kWheelNum];
@@ -193,6 +199,12 @@ hello_world::motor::Motor *GetMotorSteer(int idx) {
   return &steer_[idx];
 }
 
+/* 舵电机反馈累计计数（只增不减）。0 表示"这一版固件还没收到过任何 GM6020 反馈"，
+ * 即电机未上电或 CAN1 不通。台架测试窗口用它当"电机已上电"的信号。 */
+uint32_t MotorSteerRxCount(void) {
+  return g_steer_rx_count;
+}
+
 void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
                            const uint8_t data[8]) {
   EnsureInit();
@@ -210,6 +222,10 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
   hello_world::motor::Motor *m = LocateMotor(hcan, std_id);
   if (m != nullptr) {
     m->decode(data);
+    /* 只有"确实命中舵电机反馈 ID"的帧才计数（CAN1 上还有板间帧 0x211，不能算）。 */
+    if (hcan == kSteerBus) {
+      ++g_steer_rx_count;
+    }
     return;
   }
 

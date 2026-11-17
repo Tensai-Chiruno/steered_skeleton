@@ -83,8 +83,20 @@ bool CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
   tx_header.IDE = CAN_ID_STD;
   tx_header.RTR = CAN_RTR_DATA;
   tx_header.DLC = len;
-  if (HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &p_tx_mailbox) != HAL_OK) {
-    ++g_tx_fail_count;   /* 邮箱满/bus-off 时会走到这里，不再静默丢帧 */
+  const HAL_StatusTypeDef st = HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &p_tx_mailbox);
+  if (st == HAL_BUSY) {
+    /* 【现场修复 2026-11-18】邮箱暂时满不算"总线故障"。
+     * P1-8 规则是"对端在线 + CAN 发送持续失败 -> 强制急停"，
+     * 而 1 kHz 下三帧（0x1FF / 0x200 / 板间帧）偶尔会把三个发送邮箱同时占满，
+     * HAL 返回 HAL_BUSY。原来这会持续累加 g_tx_fail_count -> P1-8 误触发 ->
+     * 状态机永远卡在 Dead、电机拿不到指令
+     * （现象：遥控在线、对端在线、两个 TEC 都是 0，但急停恒为 1）。
+     * 现在只有真正的发送错误才计数；邮箱满就下一拍再发。 */
+    g_last_tx_ok = false;
+    return false;
+  }
+  if (st != HAL_OK) {
+    ++g_tx_fail_count;   /* bus-off / 参数错误等真故障才计数 */
     g_last_tx_ok = false;
     return false;
   }
