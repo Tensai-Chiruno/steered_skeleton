@@ -55,5 +55,6 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
  *              因此本函数必须被周期调用，电机才会被真正使能。
  */
 void MotorSendAllCommands(void);
+void MotorDiagSweepEnable(void);  /* 诊断·临时 */
 
 #endif /* GIMBAL_INSTANCE_INS_MOTOR_HPP_ */

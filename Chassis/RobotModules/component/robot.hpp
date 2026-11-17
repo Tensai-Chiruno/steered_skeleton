@@ -78,6 +78,16 @@ class Robot {
   void updateMode(void);
   void updateMotion(void);
 
+  /* 【现场修复 2026-11-17】遥控数据来源选择：本地 DBUS 或云台板转发（0x212）。
+   * 接收机只接在云台板，底盘收不到；硬件不能改线，所以由云台转发。
+   * 下面这几个访问器把"从哪来"的差异收在一处，控制逻辑不用到处写 if。 */
+  hello_world::remote_control::SwitchState LeftSwitch(void) const;
+  hello_world::remote_control::SwitchState RightSwitch(void) const;
+  float StickLv(void) const;
+  float StickLh(void) const;
+  float StickRh(void) const;
+  bool rc_from_relay_ = false;   ///< 本拍遥控是否来自转发
+
   static float Deadband(float v, float db);
   static float ClampNorm(float v);
 

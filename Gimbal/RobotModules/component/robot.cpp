@@ -131,7 +131,9 @@ void Robot::updateMotion(void) {
   if (life_state_ != LifeState::kWorking || rc_ == nullptr) return;
   const float dyaw = Deadband(ClampNorm(rc_->rc_rh()), params_.remote_deadband) *
                      params_.max_yaw_rate * kDt;
-  const float dpitch = -Deadband(ClampNorm(rc_->rc_lv()), params_.remote_deadband) *
+  /* 现场实测 2026-11-17：原来的负号让"左摇杆向上推"变成"云台向下走"，
+   * 与直觉相反（用户推上想抬头）。改成正号：推上 = pitch 增大 = 抬头。 */
+  const float dpitch = Deadband(ClampNorm(rc_->rc_lv()), params_.remote_deadband) *
                        params_.max_pitch_rate * kDt;
   motion_.yaw += dyaw;
   float p = motion_.pitch + dpitch;

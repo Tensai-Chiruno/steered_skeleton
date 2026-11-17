@@ -93,6 +93,12 @@ hello_world::motor::M3508 wheel_[kWheelNum];
 hello_world::motor::GM6020 steer_[kSteerNum];
 bool inited_ = false;
 
+/* 【诊断·临时】两条总线上"收到过哪些 ID"的位掩码（bit n = ID n 出现过）。
+ * 用途：找 yaw 电机到底挂在哪条总线、用什么 ID 回帧
+ * （云台板扫描后只发现 0x12 一台，说明 yaw 不在云台那侧）。 */
+volatile uint32_t g_diag_mask_c1 = 0;   /* CAN1（舵总线） */
+volatile uint32_t g_diag_mask_c2 = 0;   /* CAN2（轮总线 / 主干） */
+
 /** 一次性构造全部电机对象。首次访问任何 GetMotorXxx 时执行。 */
 void EnsureInit(void) {
   if (inited_) {
@@ -185,6 +191,16 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
                            const uint8_t data[8]) {
   EnsureInit();
 
+  /* 【诊断·临时】记录两条总线上出现过的 CAN ID（bit n = ID n 出现过）。
+   * 用途：找 yaw 电机到底挂在哪条总线/用哪个 ID（云台板扫描后只发现 0x12 一台）。 */
+  if (std_id < 32u) {
+    if (hcan == kWheelBus) {
+      g_diag_mask_c2 |= (1UL << std_id);
+    } else if (hcan == kSteerBus) {
+      g_diag_mask_c1 |= (1UL << std_id);
+    }
+  }
+
   hello_world::motor::Motor *m = LocateMotor(hcan, std_id);
   if (m != nullptr) {
     m->decode(data);
@@ -193,6 +209,26 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
 
   /* 未命中：双板通讯帧（0x210 / 0x211）在阶段 4 接入这里。
    * 现阶段直接丢弃——静默丢弃比误判成电机更安全。 */
+}
+
+/* 【诊断·临时】向两条总线各 ID 1..8 发一帧达妙"使能"命令，扫描有哪些电机存在。
+ * 只发使能（0xFF×7 + 0xFC），不给位置/速度/力矩，电机不会动。
+ * 发完看 g_diag_mask_c1 / g_diag_mask_c2 就知道谁在回话。 */
+void MotorDiagSweepEnable(void) {
+  EnsureInit();
+  uint8_t buf[8];
+  CAN_HandleTypeDef *const buses[2] = {&hcan1, &hcan2};
+  for (uint8_t b = 0; b < 2u; ++b) {
+    for (uint8_t id = 1; id <= 8u; ++id) {
+      for (uint8_t i = 0; i < 7u; ++i) {
+        buf[i] = 0xFFu;
+      }
+      buf[7] = 0xFCu;
+      CAN_Send_Msg(buses[b], buf, id, 8);
+      for (volatile uint32_t d = 0; d < 20000u; ++d) {
+      }
+    }
+  }
 }
 
 void MotorSendAllCommands(void) {

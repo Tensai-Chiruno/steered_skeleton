@@ -60,5 +60,6 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
  *              最后用共享 ID 发一次。逐台各发一帧会互相覆盖，只有一台响应。
  */
 void MotorSendAllCommands(void);
+void MotorDiagSweepEnable(void);  /* 诊断·临时 */
 
 #endif /* CHASSIS_INSTANCE_INS_MOTOR_HPP_ */

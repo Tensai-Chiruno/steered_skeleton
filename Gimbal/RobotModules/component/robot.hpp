@@ -38,7 +38,7 @@ class Robot {
     /* 遥控离线阈值不在这里：唯一来源是 ins_comm_state.cpp 的 kRemoteTimeoutMs */
     uint32_t resurrection_hold_ms = 1200;  ///< >= Imu::calib_ms(1000)
     float max_yaw_rate = 3.0f;             ///< rad/s
-    float max_pitch_rate = 2.0f;           ///< rad/s
+    float max_pitch_rate = 1.0f;           ///< rad/s
     float pitch_min = -0.60f;              ///< rad，与 Gimbal::Params 同源数值
     float pitch_max = 0.90f;               ///< rad
     float remote_deadband = 0.02f;

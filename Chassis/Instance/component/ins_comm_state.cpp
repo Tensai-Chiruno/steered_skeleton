@@ -20,7 +20,7 @@
 /* Private macro -------------------------------------------------------------*/
 namespace {
 /* DBUS 帧率约 143 Hz（7 ms 一帧），100 ms 无帧即判离线，与 GIMBAL_CHASSIS 一致 */
-constexpr uint32_t kRemoteTimeoutMs = 100;
+constexpr uint32_t kRemoteTimeoutMs = 300;
 }  // namespace
 
 /* Private variables ---------------------------------------------------------*/

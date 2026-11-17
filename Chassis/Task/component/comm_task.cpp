@@ -31,7 +31,11 @@
 /* Private variables ---------------------------------------------------------*/
 namespace {
 constexpr uint16_t kDbusFrameLen = 18u;  ///< DBUS 固定 18 字节
-uint8_t g_dbus_buf[kDbusFrameLen];
+/* 接收缓冲区开两帧（36 字节）：对齐漂移时也能保证里面含一整帧（同云台板）。 */
+constexpr uint16_t kDbusBufLen = 36u;    ///< 接收缓冲区（2 帧）
+uint8_t g_dbus_buf[kDbusBufLen];
+/* 上一次成功的对齐偏移（对齐正确后稳定不变） */
+uint8_t g_align_hint = 0u;
 /* 先解到临时对象，跳变检查通过才采用 —— 这样"保持上一帧"是天然的：
  * 不通过时 GetRemoteControl() 里的 rc_*_ 一个字节都没被改过。 */
 hello_world::remote_control::DT7 g_rc_scratch;
@@ -43,6 +47,7 @@ void CommTaskInit(void) {
   /* 1) 两条总线都配置全收滤波器 */
   CanFilter_Init(&hcan1);
   CanFilter_Init(&hcan2);
+  MotorDiagSweepEnable();  /* 诊断·临时：扫描两条总线上有哪些 ID 在回话 */
 
   /* 2) 启动外设并打开接收中断。
    *    CanFilter_Init 只配滤波器、不启动外设；漏掉 HAL_CAN_Start 的现象是
@@ -96,20 +101,60 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
     return;
   }
   if (Size >= kDbusFrameLen) {
-    /* DBUS 没有固定帧头，掉 1 字节后长度仍是 18，`Size >= 18` 判不出来。
-     * 用"摇杆单帧跳变"当错帧判据：143 Hz 下真摇杆不可能一帧跳 >0.45。
-     * 不可信时保持上一帧值（不清零），连续 3 帧按离线走现成急停。 */
-    g_rc_scratch.decode(g_dbus_buf);
-    hello_world::comm::RcSticks now;
-    now.lv = g_rc_scratch.rc_lv();
-    now.lh = g_rc_scratch.rc_lh();
-    now.rv = g_rc_scratch.rc_rv();
-    now.rh = g_rc_scratch.rc_rh();
-    if (g_rc_gate.accept(now)) {
-      *GetRemoteControl() = g_rc_scratch;
-      NotifyRemoteFrame();
-    } else if (g_rc_gate.shouldDropOnline()) {
-      InvalidateRemote();   /* 连续可疑：立即判离线，车停住 */
+    /* 【现场修复 2026-11-17，与云台板同一套】对齐自愈。
+     *
+     * 根因：DBUS 是 18 字节定长帧但没有帧头，靠"空闲+DMA"接收时缓冲区起点会漂移，
+     * 长度仍是 18，`Size >= 18` 查不出来；18 字节缓冲里可能整块都是"半帧混合物"，
+     * 于是解码出拨杆 0（非法）→ 被判急停 → 状态机在 Working/Dead 之间反复跳。
+     *
+     * 修法：
+     *   ① 缓冲区开到 36 字节（两帧），保证里面一定含一整帧；
+     *   ② 滑窗找第一段满足"拨杆 1..3 + ch0/ch1 在 200..1900"的 18 字节；
+     *   ③ 优先沿用上一次成功的偏移，找到就停（对齐正确后不再变动）。
+     * 注意：本机实测 ch2/ch3 恒为 0 附近，不能拿 4 个通道一起当判据。 */
+    auto frame_ok = [](const uint8_t *d) -> bool {
+      const uint16_t c0 = static_cast<uint16_t>((d[0] | (d[1] << 8)) & 0x7FF);
+      const uint16_t c1 = static_cast<uint16_t>(((d[1] >> 3) | (d[2] << 5)) & 0x7FF);
+      const uint8_t s1 = static_cast<uint8_t>((d[5] >> 6) & 0x03);
+      const uint8_t s2 = static_cast<uint8_t>((d[5] >> 4) & 0x03);
+      if (s1 < 1u || s1 > 3u || s2 < 1u || s2 > 3u) return false;
+      const uint16_t lo = 200u, hi = 1900u;
+      return c0 >= lo && c0 <= hi && c1 >= lo && c1 <= hi;
+    };
+
+    bool aligned = false;
+    const uint16_t begin = (g_align_hint < kDbusBufLen) ? g_align_hint : 0u;
+    for (uint16_t n = 0; n < kDbusBufLen; ++n) {
+      const uint16_t r = static_cast<uint16_t>((begin + n) % kDbusBufLen);
+      uint8_t tmp[kDbusFrameLen];
+      for (uint16_t k = 0; k < kDbusFrameLen; ++k) {
+        tmp[k] = g_dbus_buf[(r + k) % kDbusBufLen];
+      }
+      if (!frame_ok(tmp)) {
+        continue;
+      }
+      g_rc_scratch.decode(tmp);
+      const auto s1 = g_rc_scratch.rc_l_switch();
+      const auto s2 = g_rc_scratch.rc_r_switch();
+      if (s1 >= 1u && s1 <= 3u && s2 >= 1u && s2 <= 3u) {
+        aligned = true;
+        g_align_hint = static_cast<uint8_t>(r);
+        break;
+      }
+    }
+
+    if (aligned) {
+      hello_world::comm::RcSticks now;
+      now.lv = g_rc_scratch.rc_lv();
+      now.lh = g_rc_scratch.rc_lh();
+      now.rv = g_rc_scratch.rc_rv();
+      now.rh = g_rc_scratch.rc_rh();
+      if (g_rc_gate.accept(now)) {
+        *GetRemoteControl() = g_rc_scratch;
+        NotifyRemoteFrame();
+      } else if (g_rc_gate.shouldDropOnline()) {
+        InvalidateRemote();   /* 连续可疑：立即判离线，车停住 */
+      }
     }
   }
   if (huart3.RxState != HAL_UART_STATE_BUSY_RX) {

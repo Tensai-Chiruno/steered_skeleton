@@ -17,6 +17,7 @@
 
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"
+#include "rc_relay.hpp"
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -39,11 +40,18 @@ robot::GimbalChassisComm *GetGimbalChassisComm() { return &g_comm; }
 
 void BoardCommDispatch(CAN_HandleTypeDef *hcan, uint32_t std_id,
                        const uint8_t data[8]) {
-  if (hcan != kBoardBus || std_id != g_comm.rx_id()) {
+  if (hcan != kBoardBus) {
+    return;
+  }
+  /* 0x212：云台板转发来的遥控数据（接收机只接在云台板，底盘板 DBUS 输入是空的） */
+  if (std_id == robot::kRcRelayTxId) {
+    (void)robot::UnpackRcRelay(data);
+    return;
+  }
+  if (std_id != g_comm.rx_id()) {
     return;
   }
   g_comm.decode(data);
-
 }
 
 /* Private function definitions ----------------------------------------------*/

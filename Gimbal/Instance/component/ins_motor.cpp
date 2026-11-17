@@ -40,7 +40,11 @@
 /* Private constants ---------------------------------------------------------*/
 namespace {
 
-constexpr uint8_t kYawId = 1;    ///< yaw 关节 DM-J4310 的 CAN id
+/* yaw 关节的 CAN id。**现场实测是 3，不是文档写的 1**（2026-11-17）：
+ * 用"未识别 ID 记录"诊断看到电机总线上有 0x02 与 0x03 两种应答帧，
+ * 0x02 对应 id=2 的 pitch（已对上），0x03 说明还有一台 **id=3** 的电机在回话；
+ * 我们原来一直往 id=1 发 yaw 帧，那台电机根本不存在 -> yaw 反馈恒 0、使能恒 0。 */
+constexpr uint8_t kYawId = 3;    ///< yaw 关节 DM 电机的 CAN id（现场实测 3）
 constexpr uint8_t kPitchId = 2;  ///< pitch 关节 DM-J4310 的 CAN id
 
 /* 云台两轴的零点偏移与方向，取自考核说明 6.2（已按实机补齐的固定值）。
@@ -79,6 +83,25 @@ uint32_t g_last_enable_ms = 0;
  * 这四项能一次回答"电机到底有没有使能、模式对不对、帧发没发出去"。 */
 uint8_t g_diag_motor[16];
 
+/* 【诊断·临时】电机总线上"未识别 ID"的记录（见 MotorDispatchCanFrame）：
+ *   g_diag_unk_cnt  —— 累计收到多少个没匹配上的帧（255 封顶）
+ *   g_diag_unk_last —— 最近一个没匹配上的 ID
+ *   g_diag_unk_id[] —— 前 8 个不同帧的 ID（去重靠人眼看）
+ * 这三个量只写不读，不参与控制。 */
+uint8_t g_diag_unk_cnt = 0;
+uint8_t g_diag_unk_last = 0;
+uint8_t g_diag_unk_slot = 0;
+uint8_t g_diag_unk_id[8];
+
+/* 【诊断·临时】ID=0x03 那帧的 8 个数据字节 + 计数（判断它是应答还是姿态反馈） */
+uint8_t g_diag_d03[8];
+uint8_t g_diag_d03_cnt = 0;
+
+/* 【诊断·临时】电机总线上"收到过哪些 ID"的位掩码（bit n = ID n 出现过）。
+ * 配合 MotorDiagSweepEnable()：先向 ID 1..8 广播使能，再看谁回话，
+ * 就能一次搞清"总线上到底有几台电机、各自用什么 ID 回帧"。 */
+volatile uint32_t g_diag_rx_mask = 0;
+
 void EnsureInit(void) {
   if (inited_) {
     return;
@@ -108,8 +131,8 @@ void EnsureInit(void) {
    * 这条同时是对「考核说明表格写反了」的固化——真实情况以设备类为准，
    * 若上板后反馈来自 0x01/0x02 而不是 0x11/0x12，说明电机上位机里的
    * CAN ID / Master ID 配置反了，需要重新配置电机而不是改这里。 */
-  HW_ASSERT(hello_world::motor::DM_J4310::GetTxId(kYawId) == 0x01, "yaw tx id");
-  HW_ASSERT(hello_world::motor::DM_J4310::GetRxId(kYawId) == 0x11, "yaw rx id");
+  HW_ASSERT(hello_world::motor::DM_J4310::GetTxId(kYawId) == 0x03, "yaw tx id");
+  HW_ASSERT(hello_world::motor::DM_J4310::GetRxId(kYawId) == 0x13, "yaw rx id");
   HW_ASSERT(hello_world::motor::DM_J4310::GetTxId(kPitchId) == 0x02, "pitch tx id");
   HW_ASSERT(hello_world::motor::DM_J4310::GetRxId(kPitchId) == 0x12, "pitch rx id");
 
@@ -127,10 +150,15 @@ hello_world::motor::Motor *LocateMotor(CAN_HandleTypeDef *hcan, uint32_t id) {
   if (hcan != kMotorBus) {
     return nullptr;
   }
-  if (hello_world::motor::DM_J4310::GetRxId(kYawId) == id) {
+  /* 【现场修复 2026-11-17】同时接受两种反馈 ID。
+   * 标准达妙协议是「反馈 ID = 电机 id + 0x10」（0x13 / 0x12），
+   * 但现场这台 yaw 电机（id=3）**用自身 id 号 0x03 回帧**，
+   * 只认 0x13 的话它永远"没反馈、没使能"（诊断变量：使能 yaw=0、yaw 实测恒 0）。
+   * 所以这里把 `id` 和 `id+0x10` 都当成该电机的帧。 */
+  if (hello_world::motor::DM_J4310::GetRxId(kYawId) == id || kYawId == id) {
     return &yaw_;
   }
-  if (hello_world::motor::DM_J4310::GetRxId(kPitchId) == id) {
+  if (hello_world::motor::DM_J4310::GetRxId(kPitchId) == id || kPitchId == id) {
     return &pitch_;
   }
   return nullptr;
@@ -153,13 +181,58 @@ void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
                            const uint8_t data[8]) {
   EnsureInit();
 
+  /* 【诊断·临时】记录电机总线上出现过的所有 ID（bit n = ID n 出现过） */
+  if (hcan == kMotorBus && std_id < 32u) {
+    g_diag_rx_mask |= (1UL << std_id);
+  }
+
   hello_world::motor::Motor *m = LocateMotor(hcan, std_id);
   if (m != nullptr) {
     m->decode(data);
     return;
   }
 
+  /* 【诊断·临时】把 ID=0x03（疑似 yaw 电机）那帧的 8 个数据字节原样存下来，
+   * 用来判断它到底是"命令应答(FF...)"还是"姿态反馈"还是"全 0"。 */
+  if (hcan == kMotorBus && std_id == 0x03u) {
+    for (uint8_t i = 0; i < 8u; ++i) {
+      g_diag_d03[i] = data[i];
+    }
+    ++g_diag_d03_cnt;
+  }
+
   /* 未命中：双板通讯帧（0x210 / 0x211）在阶段 4 接入这里。 */
+
+  /* 【诊断·临时】把"电机总线上收到、但我们的 ID 表里没有"的帧记下来，
+   * 用来回答"yaw 电机到底在不在回帧、用的什么 ID"（现场 yaw 反馈恒 0）。
+   * 只记录，不参与任何控制；排障完删掉。 */
+  if (hcan == kMotorBus) {
+    if (g_diag_unk_cnt < 255u) {
+      ++g_diag_unk_cnt;
+    }
+    g_diag_unk_last = static_cast<uint8_t>(std_id & 0xFFu);
+    if (g_diag_unk_slot < 8u) {
+      g_diag_unk_id[g_diag_unk_slot++] = static_cast<uint8_t>(std_id & 0xFFu);
+    }
+  }
+}
+
+/* 【诊断·临时】向 ID 1..8 各发一帧达妙"使能"命令，用来扫描总线上有哪些电机存在。
+ * 只发使能（0xFF×7 + 0xFC），不给位置/速度/力矩，电机不会动。
+ * 配合 g_diag_rx_mask：发完再看总线上哪些 ID 回了帧，就能确认"有没有别的 ID 的电机"。 */
+void MotorDiagSweepEnable(void) {
+  EnsureInit();
+  uint8_t buf[8];
+  for (uint8_t id = 1; id <= 8u; ++id) {
+    for (uint8_t i = 0; i < 7u; ++i) {
+      buf[i] = 0xFFu;
+    }
+    buf[7] = 0xFCu;
+    CAN_Send_Msg(kMotorBus, buf, id, 8);
+    for (volatile uint32_t d = 0; d < 20000u; ++d) {
+      /* 约 1~2 ms 空转，等总线把帧发出去 */
+    }
+  }
 }
 
 void MotorSendAllCommands(void) {

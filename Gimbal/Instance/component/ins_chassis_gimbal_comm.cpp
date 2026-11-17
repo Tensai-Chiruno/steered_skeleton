@@ -17,6 +17,10 @@
 
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"
+#include "HW_can.hpp"
+#include "ins_comm.hpp"
+#include "ins_comm_state.hpp"
+#include "rc_relay.hpp"
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -47,13 +51,34 @@ robot::GimbalChassisComm g_comm(robot::GimbalChassisComm::CodePart::Gimbal, kG2c
 /* Exported function definitions ---------------------------------------------*/
 robot::GimbalChassisComm *GetGimbalChassisComm() { return &g_comm; }
 
+/* 【现场修复 2026-11-17】把"板间帧该走哪条总线"暴露出去。
+ * 之前 comm_task.cpp 里把发送写死成 &hcan2，而 kBoardBus 已经改成 hcan1 ——
+ * 结果"收在 CAN1、发却在 CAN2"，底盘永远收不到云台的 0x211（现场：对端离线=1）。 */
+CAN_HandleTypeDef *GetBoardCommBus(void) { return kBoardBus; }
+
+/* 遥控转发：把云台板收到的遥控数据打包成 8 字节发到底盘（见 rc_relay.hpp）。
+ * 接收机的信号线只接到云台板，而底盘要动必须有遥控 —— 硬件不能改线，只能这样转发。 */
+void SendRcRelay(void) {
+  static uint8_t seq = 0;
+  const auto *rc = GetRemoteControl();
+  if (rc == nullptr) {
+    return;
+  }
+  uint8_t buf[8];
+  const bool online = IsRemoteOnline();
+  robot::PackRcRelay(online ? 1u : 0u, rc->rc_lv(), rc->rc_lh(), rc->rc_rv(), rc->rc_rh(),
+                     static_cast<uint8_t>(rc->rc_l_switch()),
+                     static_cast<uint8_t>(rc->rc_r_switch()), seq, buf);
+  CAN_Send_Msg(kBoardBus, buf, robot::kRcRelayTxId, 8);
+  ++seq;
+}
+
 void BoardCommDispatch(CAN_HandleTypeDef *hcan, uint32_t std_id,
                        const uint8_t data[8]) {
   if (hcan != kBoardBus || std_id != g_comm.rx_id()) {
     return;
   }
   g_comm.decode(data);
-
 }
 
 /* Private function definitions ----------------------------------------------*/

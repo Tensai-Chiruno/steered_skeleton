@@ -38,6 +38,8 @@ robot::GimbalChassisComm *GetGimbalChassisComm();
  * @note   由 CAN 接收中断调用。只认 CAN2 上、ID 等于「本方接收 ID」的帧，
  *         其余直接返回——电机帧在上一步已经被 MotorDispatchCanFrame 消化掉了。
  */
+CAN_HandleTypeDef *GetBoardCommBus(void);
+void SendRcRelay(void);
 void BoardCommDispatch(CAN_HandleTypeDef *hcan, uint32_t std_id,
                        const uint8_t data[8]);
 

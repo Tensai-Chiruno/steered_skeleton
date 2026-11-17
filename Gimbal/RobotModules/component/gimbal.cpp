@@ -100,8 +100,7 @@ void Gimbal::update(void) {
     yaw_raw = 0.0f;           /* 死区只清输出，不动 PID 的调用节拍 */
     if (pid_yaw) pid_yaw->reset();
   }
-  yaw->setInput(Clamp(yaw_raw, -params_.max_torq, params_.max_torq));
-
+  yaw->setInput(SlewLimit(Clamp(yaw_raw, -params_.max_torq, params_.max_torq), out_yaw_));
   /* ---- pitch：有限角度 + 软件限位 ---- */
   float pitch_tar = Clamp(target_.pitch, params_.pitch_min, params_.pitch_max);
   auto *pid_pitch = GetPidMotorPitch();
@@ -114,7 +113,26 @@ void Gimbal::update(void) {
     pitch_raw = 0.0f;
     if (pid_pitch) pid_pitch->reset();
   }
-  pitch->setInput(Clamp(pitch_raw, -params_.max_torq, params_.max_torq));
+  /* 重力前馈：按当前 pitch 的余弦给一个"托住云台"的基础力矩，
+   * 让 PID 只负责修残差。这样就不需要积分（见 gimbal.hpp 里的说明）。 */
+  float pitch_ff = params_.gravity_torq * cosf(current_.pitch);
+  pitch_raw += pitch_ff;
+  pitch->setInput(SlewLimit(Clamp(pitch_raw, -params_.max_torq, params_.max_torq), out_pitch_));
+}
+
+/* 输出力矩变化率限幅：每拍最多改 kTorqSlew*dt，冲不起来（见 gimbal.hpp 里的说明）。
+ * setOutputZero() 时也要把它清零，否则"急停 -> 再使能"的第一拍会从上一次的大力矩起步。 */
+float Gimbal::SlewLimit(float want, float &state) const {
+  const float dmax = kTorqSlew * kDt;
+  const float d = want - state;
+  if (d > dmax) {
+    state += dmax;
+  } else if (d < -dmax) {
+    state -= dmax;
+  } else {
+    state = want;
+  }
+  return state;
 }
 
 }  // namespace robot

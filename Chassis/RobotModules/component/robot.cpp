@@ -19,6 +19,7 @@
 
 #include "HW_can.hpp"
 #include "ins_comm_state.hpp"
+#include "rc_relay.hpp"
 #include "tick.hpp"
 
 namespace {
@@ -63,9 +64,17 @@ void Robot::init(void) {
 }
 
 void Robot::updateRemote(void) {
-  // 遥控在线 = 收到过合法帧 且 最近 100 ms 内有更新（见 ins_comm_state.cpp）。
-  rc_online_ = IsRemoteOnline();
-  if (!rc_online_ || rc_ == nullptr) {
+  /* 【现场修复 2026-11-17】接收机的信号线只接到云台板，底盘板 DBUS 输入是空的
+   * （实测：底盘 PC11 800 次采样零跳变、USART3 零字节）。
+   * 硬件不能改线，所以云台板把遥控数据用 0x212 转发过来（见 rc_relay.hpp）。
+   * 控制源优先级：本地 DBUS > 转发的遥控；两者都没有才算离线急停。 */
+  const bool local_online = IsRemoteOnline();
+  const bool relay_online = robot::RcRelayFresh() && (robot::g_rc_relay.online != 0u);
+  rc_from_relay_ = (!local_online && relay_online);
+  rc_online_ = local_online || relay_online;
+
+  // 遥控离线 = 收到过合法帧 且 最近有更新（见 ins_comm_state.cpp）。
+  if (!rc_online_ || (rc_ == nullptr && !rc_from_relay_)) {
     // 离线即急停：这是考核 1.3「失效即归零」的第一层。
     // 注意这里 return 之前没有清 peer_offline_，那是有意的：
     // 遥控掉了就够判急停了，不必再依赖对端状态。
@@ -78,7 +87,7 @@ void Robot::updateRemote(void) {
   /* 急停判据用白名单（P2-22 / N-4）：
    * 只有明确落在 Up / Mid 才不算急停；未知编码（含 0）一律按急停处理。
    * 若左拨杆实际是两档开关，只产生 Up/Down，这条依然正确。 */
-  const auto sw = rc_->rc_l_switch();
+  const auto sw = LeftSwitch();
   estop_ = !(sw == hello_world::remote_control::kSwitchStateUp ||
              sw == hello_world::remote_control::kSwitchStateMid);
 
@@ -214,8 +223,8 @@ void Robot::updateLifeState(uint32_t now) {
 
 void Robot::updateMode(void) {
   // 右拨杆三档映射到三种底盘模式；没有遥控器时给最保守的"分离"。
-  if (rc_ == nullptr) { mode_ = ChassisMode::kDepart; return; }
-  switch (rc_->rc_r_switch()) {
+  if (rc_ == nullptr && !rc_from_relay_) { mode_ = ChassisMode::kDepart; return; }
+  switch (RightSwitch()) {
     case hello_world::remote_control::kSwitchStateUp:   mode_ = ChassisMode::kDepart; break;
     case hello_world::remote_control::kSwitchStateMid:  mode_ = ChassisMode::kFollow; break;
     case hello_world::remote_control::kSwitchStateDown: mode_ = ChassisMode::kGyro; break;
@@ -225,18 +234,19 @@ void Robot::updateMode(void) {
 
 void Robot::updateMotion(void) {
   motion_.reset();
-  if (life_state_ != LifeState::kWorking || rc_ == nullptr) return;
+  if (life_state_ != LifeState::kWorking) return;
+  if (rc_ == nullptr && !rc_from_relay_) return;
   if (ctrl_source_ != CtrlSource::kRemote) return;
 
   // 平移：左摇杆竖 → vx（推前为正），左摇杆横 → vy。
   // 注意这里的 (vx, vy) 是**云台坐标系**，旋转到车体系由 Chassis 负责（考核 3.2）。
   // 三步处理：先夹到 ±1（吸收 DT7 实际量程差异）→ 过死区 → 乘上限。
-  motion_.vx = Deadband(ClampNorm(rc_->rc_lv()), params_.remote_deadband) * params_.max_vx;
-  motion_.vy = Deadband(ClampNorm(rc_->rc_lh()), params_.remote_deadband) * params_.max_vy;
+  motion_.vx = Deadband(ClampNorm(StickLv()), params_.remote_deadband) * params_.max_vx;
+  motion_.vy = Deadband(ClampNorm(StickLh()), params_.remote_deadband) * params_.max_vy;
 
   switch (mode_) {
     case ChassisMode::kDepart:
-      motion_.w = Deadband(ClampNorm(rc_->rc_rh()), params_.remote_deadband) * params_.max_w_manual;
+      motion_.w = Deadband(ClampNorm(StickRh()), params_.remote_deadband) * params_.max_w_manual;
       break;
     case ChassisMode::kFollow:
       /* δ 由双板帧喂入；未接入前 δ 恒 0 → w 恒 0（安全缺省②）。 */
@@ -293,6 +303,42 @@ void Robot::update(void) {
     f.work_mode = ToByte(mode_);
     f.ctrl_mode = ToByte(life_state_);
   }
+}
+
+/* ---- 遥控来源访问器（本地 DBUS / 云台转发） ------------------------------- */
+hello_world::remote_control::SwitchState Robot::LeftSwitch(void) const {
+  if (rc_from_relay_) {
+    return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s1);
+  }
+  if (rc_ != nullptr) {
+    return rc_->rc_l_switch();
+  }
+  return hello_world::remote_control::kSwitchStateDown;   /* 未知一律按急停 */
+}
+
+hello_world::remote_control::SwitchState Robot::RightSwitch(void) const {
+  if (rc_from_relay_) {
+    return static_cast<hello_world::remote_control::SwitchState>(robot::g_rc_relay.s2);
+  }
+  if (rc_ != nullptr) {
+    return rc_->rc_r_switch();
+  }
+  return hello_world::remote_control::kSwitchStateUp;
+}
+
+float Robot::StickLv(void) const {
+  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.lv);
+  return (rc_ != nullptr) ? rc_->rc_lv() : 0.0f;
+}
+
+float Robot::StickLh(void) const {
+  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.lh);
+  return (rc_ != nullptr) ? rc_->rc_lh() : 0.0f;
+}
+
+float Robot::StickRh(void) const {
+  if (rc_from_relay_) return robot::DequantizeStick(robot::g_rc_relay.rh);
+  return (rc_ != nullptr) ? rc_->rc_rh() : 0.0f;
 }
 
 }  // namespace robot
