@@ -200,20 +200,29 @@ void MotorSendAllCommands(void) {
 
   uint8_t buf[8];
 
-  /* DM 是「一台电机一帧」，不像 GM6020/M3508 那样 4 台共用，
-   * 所以不需要清零整块缓冲，但 encode 是否写满 8 字节由设备类保证。
-   * 这里仍然清零，避免设备类只填部分字节时把栈上垃圾发出去。 */
+  /* 【极其重要】encode() 返回 false 时**绝不能发送**。
+   *
+   * 2026-11-17 现场："云台一下子猛地砸到最猛的地方"。
+   * 根因就在这里：DaMiao::encode() 在 `current_ctrl_mode` 还未知（刚上电、反馈没到）
+   * 时会走 `default: return false;` —— **一个字节都不写**。
+   * 而 MIT 帧的力矩字段是"无符号 12 位居中表示"：**全 0 = 最大负力矩**。
+   * 于是"缓冲清零 + 发送"等于给电机下了一记满力矩反向指令 -> 猛地砸到极限。
+   *
+   * 现在：只有 encode() 真的生成了帧才发；没生成就一个字都不发。
+   * 这一条同时也是"绝不对未知状态电机瞎发指令"的通用纪律。 */
   for (int i = 0; i < 8; ++i) {
     buf[i] = 0;
   }
-  yaw_.encode(buf);
-  CAN_Send_Msg(kMotorBus, buf, yaw_.tx_id(), 8);
+  if (yaw_.encode(buf)) {
+    CAN_Send_Msg(kMotorBus, buf, yaw_.tx_id(), 8);
+  }
 
   for (int i = 0; i < 8; ++i) {
     buf[i] = 0;
   }
-  pitch_.encode(buf);
-  CAN_Send_Msg(kMotorBus, buf, pitch_.tx_id(), 8);
+  if (pitch_.encode(buf)) {
+    CAN_Send_Msg(kMotorBus, buf, pitch_.tx_id(), 8);
+  }
 }
 
 /* Private function definitions ----------------------------------------------*/
