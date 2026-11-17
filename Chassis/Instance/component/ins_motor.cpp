@@ -35,6 +35,7 @@
 #include "HW_can.hpp"
 #include "assert.hpp"
 #include "can.h"
+#include "tick.hpp"
 
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
@@ -78,7 +79,17 @@ constexpr hello_world::motor::Dir kWheelDir[kWheelNum] = {
  * 三个轮「前推为正」= kDirFwd 正确；RF 相反，且它的舵零位同时差 180°（见 kSteerOffset[3]），
  * 两者是同一个物理事实的两面：RF 的舵轮装配方向与另外三个差 π。 */
 
-/* 舵电机：id 1~4，保留内置减速器（ex_redu_rat = 1），方向全部反向。
+/* 【δ 用】云台 yaw 达妙电机（DM_J4310 同型号）。
+ * 决定性实测（2026-11-18，底盘侧抓帧 + 掩码）：这台电机接在**底盘 CAN2**，
+ *   电机 id = 1，反馈帧 std_id = 0x11；而云台板那条 CAN1 上**没有任何低 ID 帧**。
+ * 所以云台板永远读不到 yaw（它按 kYawId=3 去找 0x13），这就是 δ 恒为 0 的根因。
+ * 现在由底盘直接管这台电机：先用 kp=kd=0、力矩 0 的 MIT 帧让它以「零力矩」上报角度，
+ * 用来算 δ；力矩闭环等 δ 标定完再谈。
+ * 注意：达妙 MIT 一使能就会按 kp/kd 出力，所以这里 kp=kd=0 —— 是"软掉"而不是"上锁"。 */
+constexpr uint8_t kYawId = 1;
+constexpr hello_world::motor::Dir kYawDir = hello_world::motor::kDirFwd;
+
+ /* 舵电机：id 1~4，保留内置减速器（ex_redu_rat = 1），方向全部反向。
  * 舵向零点偏移来自考核说明 6.2「已按实机配置统一补齐」的固定值，必须照抄：
  *   缺了它，舵角反馈就不是车体坐标系下的舵角，逆解算出来的目标角会整体偏掉，
  *   现象是「四轮都在转但车身斜着走」。 */
@@ -116,7 +127,10 @@ namespace {
 
 hello_world::motor::M3508 wheel_[kWheelNum];
 hello_world::motor::GM6020 steer_[kSteerNum];
+hello_world::motor::DM_J4310 yaw_;
 bool inited_ = false;
+uint32_t g_yaw_enable_ms = 0;      /* 上次发使能命令的时刻（500 ms 限频） */
+bool g_yaw_enable_dirty = true;    /* 需要（重新）发一次使能 */
 
 /* 【诊断·临时】两条总线上"收到过哪些 ID"的位掩码（bit n = ID n 出现过）。
  * 用途：找 yaw 电机到底挂在哪条总线、用什么 ID 回帧
@@ -153,6 +167,18 @@ void EnsureInit(void) {
     steer_[i].init(kSteerId[i], opt);
   }
 
+  /* 云台 yaw（达妙）：零力矩上报，用于算 δ。
+   * auto_enable=false：不让组件自己偷偷使能，改由 MotorSendAllCommands 限频显式发；
+   * enable_mode_switch=true：MIT 模式需要先切控制模式（写 CTRL_MODE 寄存器）。 */
+  {
+    hello_world::motor::OptionalParams opt;
+    opt.input_type = hello_world::motor::InputType::kRaw;  /* MIT 走 setMitInput，不经过 setInput */
+    opt.dir = kYawDir;
+    opt.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf;
+    opt.angle_offset = 0.0f;   /* δ 的零位等实测标定后再补 */
+    yaw_.init(kYawId, opt, false, true);
+  }
+
   /* 把期望的 CAN ID 钉死在这里。
    * 这四行不产生运行开销（Debug 下断言，Release 下通常被编译掉），
    * 但它把「协议表」写成了可执行的检查：以后谁把 input_type 从 kCurr 改成
@@ -181,6 +207,10 @@ namespace {
 /** 在一条总线上按反馈 ID 找电机；找不到返回 nullptr。 */
 hello_world::motor::Motor *LocateMotor(CAN_HandleTypeDef *hcan, uint32_t id) {
   if (hcan == kWheelBus) {
+    /* 云台 yaw（达妙）：反馈 id 可能是 0x11 也可能就是 1（现场两种都见过）。 */
+    if (id == hello_world::motor::DM_J4310::GetRxId(kYawId) || id == kYawId) {
+      return &yaw_;
+    }
     for (int i = 0; i < kWheelNum; ++i) {
       if (hello_world::motor::M3508::GetRxId(kWheelId[i]) == id) {
         return &wheel_[i];
@@ -220,6 +250,13 @@ uint32_t MotorSteerRxCount(void) {
 
 uint32_t MotorWheelRxCount(void) {
   return g_wheel_rx_count;
+}
+
+/* 云台 yaw（达妙，接在底盘 CAN2 上）：δ 与 yaw 闭环都用它。
+ * 注意：返回的对象是 MIT 域，setInput() 对它没有意义，必须走 setMitInput()。 */
+hello_world::motor::Motor *GetMotorYaw(void) {
+  EnsureInit();
+  return &yaw_;
 }
 
 void MotorDispatchCanFrame(CAN_HandleTypeDef *hcan, uint32_t std_id,
@@ -309,6 +346,30 @@ void MotorSendAllCommands(void) {
   CAN_Send_Msg(kSteerBus, buf,
                hello_world::motor::GM6020::GetTxId(kSteerId[0], kSteerInputType),
                8);
+
+  /* ---- 云台 yaw（达妙 DM，CAN2）：**零力矩**上报角度，给 δ 用 ----
+   * 为什么要在这里发：这台电机物理上只接到底盘 CAN2，而达妙只有在收到指令/使能后
+   * 才会持续上报反馈（实测：没人管它时复位后只发 1 帧就不再说话）。
+   * 安全性：kp=kd=0、力矩前馈 0 —— 电机处于"使能但不出力"（软掉）状态，
+   * 力矩输出恒为 0，不会带动云台。等 δ 标定完再单独做 yaw 力矩闭环。
+   * 使能命令限频 500 ms：达妙失能后不会自己回来，但也不能每毫秒重发（会把帧挤满）。 */
+  {
+    const uint32_t now_ms = hello_world::tick::GetTickMs();
+    if (g_yaw_enable_dirty || (now_ms - g_yaw_enable_ms) >= 500u) {
+      g_yaw_enable_dirty = false;
+      g_yaw_enable_ms = now_ms;
+      yaw_.enable();
+    }
+    yaw_.setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);   /* pos, vel, kp, kd, torq */
+    for (int i = 0; i < 8; ++i) {
+      buf[i] = 0;
+    }
+    /* 只在 encode() 成功时才发：控制模式还没确认时发 8 个 0 会被当成
+     * "位置 0、kp/kd=0" 的 MIT 帧（虽然这里本来就是全 0，但仍按规矩来）。 */
+    if (yaw_.encode(buf)) {
+      CAN_Send_Msg(kWheelBus, buf, hello_world::motor::DM_J4310::GetTxId(kYawId), 8);
+    }
+  }
 }
 
 /* Private function definitions ----------------------------------------------*/

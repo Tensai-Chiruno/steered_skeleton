@@ -38,6 +38,12 @@ uint32_t MotorSteerRxCount(void);
 /** 轮电机（M3508，CAN2）反馈帧累计计数，语义同上。 */
 uint32_t MotorWheelRxCount(void);
 
+/** 云台 yaw 电机（达妙 DM，接在**底盘 CAN2**、id=1、反馈 0x11）。
+ * 为什么在底盘：实测该电机物理上接在底盘 CAN2，云台板那条 CAN1 上没有任何低 ID 帧，
+ * 所以云台板读不到它（δ 恒为 0 的根因）。
+ * 注意：它在 MIT 域，控制要用 setMitInput()，setInput() 对它无效。 */
+hello_world::motor::Motor *GetMotorYaw(void);
+
 /* ---------------------------------------------------------------------------
  * CAN 层的两个入口（由 src/HW_can.cpp 与 Task/component/comm_task.cpp 调用）
  *
