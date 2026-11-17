@@ -43,7 +43,7 @@ class Chassis {
     float max_linear_speed = 2.0f;    ///< 平移速度限幅，m/s（与 Robot 侧一致）
     float max_angular_speed = 10.0f;  ///< 角速度限幅，rad/s（仅兜底）
     float max_wheel_vel = 120.0f;     ///< 轮电机输出端角速度限幅，rad/s
-    float steer_raw_limit = 2000.0f;  ///< 舵电机 raw 限幅（GM6020 电流模式；收工压到 2000 防自激）
+    float steer_raw_limit = 3000.0f;  ///< 舵电机 raw 限幅（GM6020 电流模式；收工压到 2000 防自激）
     float wheel_raw_limit = 5000.0f;  ///< 轮电机 raw 限幅（M3508 满量程 16384；首次闭环先压到 5000 防窜车）
     float steer_deadband = 0.01f;     ///< 舵角误差死区，rad
     /** 是否按 δ 把遥控的 (vx, vy) 从云台系旋到车体系。
